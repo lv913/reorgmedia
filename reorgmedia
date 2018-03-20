@@ -1,0 +1,854 @@
+#!/bin/bash +xn
+# reorgmedia
+# author: lv913
+# email:  liv913@gmail.com
+# date:   15/Mar/2018
+
+VERSION=3.0k
+
+WORKINGDIR=$(dirname "$0")
+LOGFILE=$WORKINGDIR/log.txt
+OUTFILE=$WORKINGDIR/output.txt
+STFILE=$WORKINGDIR/status.list
+FILELIST=$WORKINGDIR/file.list
+CFGDUMP=$WORKINGDIR/config.last
+
+# Elenco delle estensioni video gestite:
+VIDEOEXT=( mp4 avi mov mkv mpg webm )
+
+truncate -s 0 "$OUTFILE"
+
+declare -A CFG
+CFG["INDIR"]=""
+CFG["OUTDIR"]=""
+CFG["TEST"]=YES
+CFG["TOUCH"]=NO
+CFG["RENAME"]=NO
+CFG["FOTO"]=NO
+CFG["VIDEO"]=NO
+CFG["PATTERN"]="*"
+CFG["POWEROFF"]=NO
+CFG["QUIET"]=NO
+CFG["RESUME"]=NO
+
+DEBUG=NO
+RESUME=NO
+
+_log() {
+  IFS=$OLDIFS
+  local YEL='\033[0;32m'  # Color
+  local NC='\033[0m'      # No color
+  local V=`join_by " " $*`
+  echo -e "[$(date +"%Y-%m-%d %H:%M:%S")]: $V" >> $LOGFILE
+  if [ "$DEBUG" == "YES" ]; then
+    echo -e "[$(date +"%Y-%m-%d %H:%M:%S")]: ${YEL}$V${NC}"
+  fi
+  IFS=$'\n'
+}
+
+_print() {
+  local YEL='\033[0;32m'  # Color
+  local NC='\033[0m'      # No color
+  V=$*
+  if [ "$#" -eq "1" ]; then
+    printf "${YEL}%s${NC}\n" "$1"
+    printf "%s\n" "$1" >> $OUTFILE
+  elif [ "$#" -eq "0" ]; then
+    printf "\n"
+    printf "\n" >> $OUTFILE
+  else
+    printf "${YEL}$@"
+    printf "${NC}"
+    printf "$@" >> $OUTFILE
+  fi
+}
+
+_do_cmd() {
+  local LOGFILE_TMP=$LOGFILE.tmp
+  exec 2> >(tee -a $LOGFILE_TMP)
+  _log " ACTION: $@"
+  "$@"
+  ret=$?
+  if [[ $ret -ne 0 ]]; then
+      _print "ERRORE: Return code $ret"
+      _log "ERRORE: Return code $ret"
+      grep -v "frame= " "$LOGFILE_TMP" >> $LOGFILE
+      rm -f $LOGFILE_TMP
+      exit $ret
+  fi
+  if [ -f $LOGFILE_TMP ]; then rm $LOGFILE_TMP; fi
+}
+
+_usage() {
+# Utilizzo...
+
+local YEL='\033[0;32m'  # Color
+local NC='\033[0m'      # No color
+printf "${YEL}"
+cat <<EOF
+  Utilizzo: reorgmedia [OPZIONI]
+
+  OPZIONI:
+          -c CFGFILE      Carica un file di configurazione elaborato prima dei parametri che seguono.
+          -t              Modalità di test (default).
+          -p              Modalità di produzione (applica le modifiche).
+          -T              Modalità 'touch', per aggiornare la data di modifica senza rinominare i file;
+                          agisce solo sulla cartella destinazione.
+          -R              Modalità 'rename', per rinominare ed effettuare il 'touch' dei file presenti
+                          nella sola cartella destinazione.
+          -a              Opera sia sulle foto jpg che sui video mov, avi e mpg (default).
+          -f              Opera sulle sole foto jpg.
+          -v              Opera sui soli video ($(join_by ', ' ${VIDEOEXT[@]})).
+          -i DIR          Specifica la directory di input.
+          -o DIR          Specifica la directory di destinazione.
+          -P PATTERN      Specifica il pattern dei file da includere.
+          -r              Se è presente un job interrotto, ne esegue il resume senza chiedere conferma.
+          -q              Non richiede interazione utente e procede con l'esecuzione configurata;
+                          non procede col resume, a meno che non sia impostato anche -r.
+          -k              Esegue lo shutdown del PC al termine, ma solo se il monitor è in standby.
+          -V              Visualizza la versione.
+          -h              Visualizza questa guida.
+
+  Casi speciali di file video:
+          nome-ro.ext     Attiva la rotazione del video in senso orario
+          nome-rao.ext    Attiva la rotazione del video in senso antiorario
+
+EOF
+printf "${NC}"
+}
+
+_cfgprint() {
+  for i in "${!CFG[@]}"; do
+    printf "CFG[$i]=${CFG[$i]} "
+  done 
+}
+
+_cfg() {
+  # Imposta il valore di configurazione $2 sulla chiave $1
+  CFG["$1"]=$2
+}
+
+_cfg_dump() {
+  local FILE=$1
+  local OLDIFS=$IFS
+  truncate -s 0 "$FILE"
+  IFS=$'\n'
+  for i in "${!CFG[@]}"; do
+    # Salvo tutti i valori tranne RESUME, QUIET e POWEROFF, che non sono permanenti
+    if [ "$i" != "RESUME" ] && [ "$i" != "QUIET" ] && [ "$i" != "POWEROFF" ]; then
+      echo "CFG[\"$i\"]=\"${CFG[$i]}\"" >> $FILE
+    fi
+  done 
+  IFS=$OLDIFS
+}
+
+_loadconfig() {
+  # Riscrive la configurazione pulita su $CONFIGFILESEC, poi la carica.
+  # Le opzioni specificate a runtime hanno la precedenza.
+  CONFIGFILE=$1
+  CONFIGFILESEC=$WORKINGDIR/cleanconfig.cfg
+  grep -E '^#|^[^ ]*=[^;&]*'  "$CONFIGFILE" > "$CONFIGFILESEC"
+  source "$CONFIGFILESEC" && rm $CONFIGFILESEC
+  for i in $(seq ${#PARAMS}); do 
+    case ${PARAMS:$i-1:1}
+    in
+    t) _cfg TEST YES;;
+    p) _cfg TEST NO;;
+    T) _cfg TOUCH YES;;
+    a) _cfg FOTO YES; _cfg VIDEO YES;;
+    f) _cfg FOTO YES;;
+    r) _cfg RESUME YES;;
+    q) _cfg QUIET YES;;
+    v) _cfg VIDEO YES;;
+    esac
+  done
+}
+
+_check_for_command() {
+  local COMMAND=$1;
+  command -v "$COMMAND" >/dev/null 2>&1
+  if [ "$?" != "0" ]; then
+    _log "Il comando $COMMAND non è disponibile. Uscita..."
+    _print "Il comando $COMMAND non è disponibile. Uscita..."
+    exit 1
+  fi
+}
+
+# join_by: concatena gli elementi di un array con delimitatore
+# es. AR=( mp4 avi mov mkv mpg webm )
+#     join_by ' -o ' ${AR[@]} -> mp4 -o avi -o mov -o mkv -o mpg -o webm
+function join_by { local d=$1; shift; echo -n "$1"; shift; printf "%s" "${@/#/$d}"; }
+
+# containsElement: verifica se un elemento è incluso in un array
+# es. AR=( mp4 avi mov mkv mpg webm )
+#     if [ `containsElement mp4 ${AR[@]}` -eq 1 ]; then echo ok; fi -> 'ok'
+function containsElement { local e match="$1"; shift; for e; do [[ "$e" == "$match" ]] && echo 0 && return 0; done; echo 1 && return 1; }
+
+# SF - Status File functions
+
+# Status File description:
+#   ORIGNAME;NAME_P1;NAME_P2;DATE_TIME;ALIAS;MAKE;MODEL;COUNT;NEW_SIZE;STATUS
+#   Campi popolati da first_rename:  1,2,4,5,9
+#   Campi popolati da second_rename: 3,6,7,8
+#   Campo 10 (status): NEW, COMPRESSING, COPIED, DONE
+#    Inizialmente i file avranno stato NEW
+#    Prima di avviare la conversione, i video avranno stato COMPRESSING
+#    Dopo first_rename tutti i file avranno stato COPIED
+#    Dopo second_rename tutti i file avranno stato DONE
+  
+SF_clear() {
+  truncate -s 0 "$STFILE"
+}
+
+SF_find_row() {
+  local KEY=$1
+  local NUMHIT=$(grep -ne "^$KEY;" $STFILE | wc -l)
+  if [ $NUMHIT -eq "0" ]; then
+    echo ""
+    return
+  else
+    local ROW=$(grep -m 1 -ne "^$KEY;" $STFILE | awk -F: '{print $1}')
+    echo $ROW
+  fi
+}
+
+SF_get_field() {
+  local ROWNUM=$1
+  local FIELD=$2
+  local ARG=$(sed -n $ROWNUM"p" $STFILE | cut -d ";" -f "$FIELD")
+  echo $ARG
+}
+
+SF_set_field() {
+  local ROWNUM=$1
+  local FIELD=$2
+  local VALUE=$3
+  local NEWROW=$(sed -n $ROWNUM"p" $STFILE | awk -F ";" -v OFS=";" -v NEWVAL=$VALUE -v F=$FIELD '{$F=NEWVAL; print }')
+  sed -i "${ROWNUM}s/.*/$NEWROW/" $STFILE
+}
+
+SF_add_row() {
+  if [ "$#" -eq "1" ]; then
+    local NEWROW=$1
+    echo "$NEWROW" >> $STFILE
+    local ROW=$(grep -m 1 -ne "^$NEWROW$" $STFILE | awk -F: '{print $1}')
+    echo $ROW
+  else
+    local KEY=$1
+    local FIELDS=$2
+    local NEWROW=$KEY
+    while [ "$FIELDS" -gt 1 ]; do
+      NEWROW+=";"
+      ((FIELDS--))
+    done
+    echo "$NEWROW" >> $STFILE
+    local ROW=$(SF_find_row "$KEY")
+    echo "$ROW"
+  fi
+}
+
+_fill_file_list() {
+  # Campi in input: LOCATION (dove cercare i file) 
+  #                 e PARAM (opzionale, se impostato a "strict" cerca solo .jpg e .mp4)
+  local LOCATION=$1
+  local PARAM=$2
+
+  truncate -s 0 "$FILELIST"
+  if [ "${CFG["FOTO"]}" == "YES" ]; then
+    find -L "$LOCATION" -maxdepth 1 -type f -iname "${CFG["PATTERN"]}" | grep -i "\.jpg$" >> $FILELIST
+  fi
+  if [ "${CFG["VIDEO"]}" == "YES" ]; then
+    if [ "$PARAM" == "strict" ]; then
+      find -L "$LOCATION" -maxdepth 1 -type f -iname "${CFG["PATTERN"]}" | grep -i "\.mp4$" >> $FILELIST
+    else
+      for EXT in "${VIDEOEXT[@]}"; do
+        find -L "$LOCATION" -maxdepth 1 -type f -iname "${CFG["PATTERN"]}" | grep -i "\.$EXT$" >> $FILELIST
+      done
+    fi
+  fi
+  SF_add_row "ORIGNAME;NAME_P1;NAME_P2;DATE_TIME;ALIAS;MAKE;MODEL;COUNT;NEW_SIZE;STATUS" >/dev/null
+  while read F
+  do
+    BASENAME=$(basename "$F")
+    NEWROW=$(SF_add_row "$BASENAME" 10)
+    SF_set_field $NEWROW 10 "NEW"
+  done < $FILELIST
+
+}
+
+_get_file_createdate() {
+  # Estrae la data di creazione in base a vari criteri
+  # Campi in input: SPEC e FILE (nome file inclusivo di path)
+  local SPEC=$1
+  local FILE=$2
+
+  #local EXT=$(echo $FILE | cut -d '.' -f2 | tr '[:upper:]' '[:lower:]')
+  local EXT=""
+  if [[ "$FILE" =~ \.([A-Za-z 0-9]*)$ ]]; then
+    EXT=$(echo "${BASH_REMATCH[1]}" | tr '[:upper:]' '[:lower:]')
+  fi
+  local SHORTNAME=$(basename "$FILE")
+  local DATE=$(echo ${SPEC} | cut -d , -f 2 -s)
+
+  if [ "$DATE" == "" ] || [ `expr match "$DATE" '0000.*'` -ne 0 ]; then
+    if [[ ("$EXT" == "mpg" && "$SHORTNAME" =~ M2U[0-9]+) || "$EXT" == "webm" ]]; then
+      # viene dalla videocamera; prendo per buona la data di ultima modifica
+      local DATE=`stat -c %y $FILE | cut -d '.' -f 1`
+    else
+      local DATE="2001-01-01 00:00:00";
+    fi
+  fi
+
+  echo "$DATE"
+}
+
+_get_alias() {
+  # Estrae un eventuale alias dal nome del file
+  # Campi in input: FILE (nome file con o senza path)
+  local FILE=$(basename "$1")
+  #local EXT=$(echo $FILE | cut -d '.' -f2 | tr '[:upper:]' '[:lower:]')
+  local EXT=""
+  if [[ "$FILE" =~ \.([A-Za-z 0-9]*)$ ]]; then
+    EXT=$(echo "${BASH_REMATCH[1]}" | tr '[:upper:]' '[:lower:]')
+  fi
+  local ALIAS
+
+  if [[ "$FILE" =~ (DSCN[0-9]+) ]]; then
+    ALIAS=${BASH_REMATCH[1]}
+  elif [[ "$FILE" =~ (^P[0-9]+) ]]; then
+    ALIAS=${BASH_REMATCH[1]}
+  elif [[ "$FILE" =~ (M2U[0-9]+) ]]; then
+    ALIAS=${BASH_REMATCH[1]}
+  elif [[ "$FILE" =~ [0-9\-]{10}\ #[0-9]{2}\-([A-Za-z0-9]*)\.$EXT ]]; then
+    ALIAS=${BASH_REMATCH[1]}
+  fi
+  if [ -z $ALIAS ]; then ALIAS=NONE; fi
+
+  echo "$ALIAS"
+}
+
+_touch_by_date() {
+  # Esegue il touch di un file a una certa data
+  local DATE=$1
+  local FILE=$2
+  _do_cmd touch -d "$DATE" "$FILE"
+}
+
+_touch_file() {
+  # Estrae la data corretta (CreateDate o data di ultima modifica) ed esegue il touch
+  set +x
+  if [ $# != "1" ]; then
+    _print " _touch_file: wrong number of params ($#)"
+    exit
+  fi
+  _log " _touch_file: begin... param count $# (`join_by ',' "$*"`)"
+  local FILE=$1
+  local SHORTNAME=$(basename "$FILE")
+  local SF_ROW=$(SF_find_row "$SHORTNAME")
+  local SPEC=`exiftool -s -csv -d "%Y-%m-%d %H:%M:%S" -CreateDate "$FILE" | grep -v SourceFile`
+  local DATE=$(_get_file_createdate "$SPEC" "$FILE")
+  _print "%-50s %-22s\n" "$(basename ""$FILE"")" "$DATE"
+
+  if [ "${CFG["TEST"]}" == "NO" ]; then
+    _touch_by_date "$DATE" "$FILE"
+  fi
+  SF_set_field $SF_ROW 10 "DONE"
+  _log " _touch_file: end."
+}
+
+
+first_rename() {
+  set +x
+
+  if [ $# != "1" ]; then
+    _print " first_rename: begin... wrong number of params ($#)"
+    exit
+  fi
+  _log " first_rename: begin... param count $# (`join_by ',' "$*"`)"
+  # impostazione dei parametri
+  local CURFILE=$(echo $1)
+  local SHORTNAME=$(basename "$CURFILE")
+  #local EXT=$(echo $SHORTNAME | cut -d '.' -f2 | tr '[:upper:]' '[:lower:]')
+  local EXT=""
+  if [[ "$SHORTNAME" =~ \.([A-Za-z 0-9]*)$ ]]; then
+    EXT=$(echo "${BASH_REMATCH[1]}" | tr '[:upper:]' '[:lower:]')
+  fi
+  local SF_ROW=$(SF_find_row "$SHORTNAME")
+  if [ "$SF_ROW" == "" ]; then
+    SF_ROW=$(SF_add_row "$SHORTNAME" 10)
+    SF_set_field $SF_ROW 10 "NEW"
+  fi
+
+  if [ "$(SF_get_field $SF_ROW 10)" == "COPIED" ] || [ "$(SF_get_field $SF_ROW 10)" == "DONE" ]; then
+    _log " $SHORTNAME in stato $(SF_get_field $SF_ROW 10). Salto..."
+    return
+  fi
+
+  local SPEC=`exiftool -s -csv -d "%Y-%m-%d %H:%M:%S" -CreateDate -Model -Make "$CURFILE" | grep -v SourceFile`
+  local DATE=`echo ${SPEC} | cut -d , -f 2 -s`
+  if [ "$DATE" == "" ] || [ `expr match "$DATE" '0000.*'` -ne 0 ]; then
+    DATE=$(_get_file_createdate "$SPEC" "$CURFILE")
+  fi
+
+  local ALIAS=$(_get_alias $SHORTNAME)
+     
+  _log " FILE & CREATEDATE: $SHORTNAME & $DATE"
+  if [ "$EXT" == "jpg" ]; then
+    local NUM=`find -L "${CFG["OUTDIR"]}" -name "D $DATE*.$EXT" | wc -l | awk '{print $1}'`
+    NUM=$((NUM+1))
+    local NEWFILE=$(SF_get_field $SF_ROW 2)
+    if [ "$NEWFILE" == "" ]; then
+      NEWFILE="D $DATE $NUM.$EXT"
+    fi
+  else
+    local NUM=`find -L "${CFG["OUTDIR"]}" -name "D $DATE*.mp4" | wc -l | awk '{print $1}'`
+    NUM=$((NUM+1))
+    local NEWFILE=$(SF_get_field $SF_ROW 2)
+    if [ "$NEWFILE" == "" ]; then
+      NEWFILE="D $DATE $NUM.mp4"
+    fi
+  fi
+  SF_set_field $SF_ROW 2 "$NEWFILE"
+  SF_set_field $SF_ROW 4 "$DATE"
+  SF_set_field $SF_ROW 5 "$ALIAS"
+  _print "%-50s %-22s %-14s %-35s\n"  "$SHORTNAME" "$DATE" "$ALIAS" "$NEWFILE"
+  if [ "${CFG["TEST"]}" == "NO" ]; then
+    # Produzione
+
+    # Modalità rename? In tal caso sposto i file ed esco.
+    if [ "${CFG["RENAME"]}" == "YES" ]; then
+      _do_cmd mv "$CURFILE" "${CFG["OUTDIR"]}/$NEWFILE"
+      SF_set_field $SF_ROW 10 "COPIED"
+      return
+    fi
+
+    # Non è modalità rename; cambio di comportamento in funzione dell'estensione.
+    if [ "$EXT" == "jpg" ]; then
+      _do_cmd cp "$CURFILE" "${CFG["OUTDIR"]}/$NEWFILE"
+      SF_set_field $SF_ROW 10 "COPIED"
+
+    elif [ $(containsElement "$EXT" "${VIDEOEXT[@]}") -eq 0 ]; then
+      # è un video; lo copio o devo comprimerlo?
+      local COMPRESSIONREQUIRED=0
+      if [ "$EXT" == "mp4" ]; then
+        local MINORVERSION=$(exiftool "$CURFILE"| grep "Minor Version" | cut -d ":" -f 2 | awk '{print $1}')
+        if [ "$MINORVERSION" != "0.0.0" ]; then
+          # Compressione non richiesta
+          _log " COMPRESSIONREQUIRED: 0"
+          _do_cmd cp "$CURFILE" "${CFG["OUTDIR"]}/$NEWFILE"
+          SF_set_field $SF_ROW 10 "COPIED"
+        else
+          # MINORVERSION è pari a 0.0.0: proviene dallo smartphone Samsung i9301, per cui serve la compressione
+          COMPRESSIONREQUIRED=1
+          _log " COMPRESSIONREQUIRED: 1"
+        fi
+      else
+        # non è .mp4, per cui lo comprimo in tutti i casi
+        COMPRESSIONREQUIRED=1
+        _log " COMPRESSIONREQUIRED: 1"
+      fi
+      if [ "$COMPRESSIONREQUIRED" -eq "1" ]; then
+        # se siamo qui, è un video e serve la compressione video e/o audio
+        local FFMPEGPARAMS=()
+        FFMPEGPARAMS+=(-loglevel warning)
+        FFMPEGPARAMS+=(-stats)
+        FFMPEGPARAMS+=(-nostdin)
+        FFMPEGPARAMS+=(-y)
+        FFMPEGPARAMS+=(-flags global_header)
+        FFMPEGPARAMS+=(-noautorotate)
+        local AUDIOFORMAT=$(exiftool "$CURFILE" | grep "Audio Format" | awk '{print $4}')
+        local AUDIOPARAMS=()
+        if [ "$AUDIOFORMAT" == "raw" ]; then
+          AUDIOPARAMS+=(aac -strict experimental -ab 32k)
+        else
+          # Edit: https://ffmpeg.zeranoe.com/forum/viewtopic.php?t=468
+          # AUDIOPARAMS+=(copy)
+          AUDIOPARAMS+=(aac)
+        fi
+        local AUDIOCODEC=$(ffprobe "$CURFILE" -show_streams -select_streams a -v quiet | grep codec_name | cut -d = -f 2)
+        local VIDEOPARAMS=()
+        VIDEOPARAMS+=(libx264)
+        VIDEOPARAMS+=(-preset slower)
+        VIDEOPARAMS+=(-crf 20)
+        VIDEOPARAMS+=(-bf 2)
+        VIDEOPARAMS+=(-cmp 2)
+        VIDEOPARAMS+=(-subcmp 2)
+        VIDEOPARAMS+=(-g 45)
+        local VIDEOFILTERS
+        if [ "$EXT" == "avi" ] && [ "$AUDIOCODEC" == "pcm_u8" ]; then
+          local AUDIOFILE=${CFG["OUTDIR"]}/$SHORTNAME.wav
+          local AVINPUT=(-i "$CURFILE" -i "$AUDIOFILE" -map 0:0 -map 1:0)
+          AUDIOPARAMS=(libmp3lame -ar 44100 -aq 0) # verificare se ha senso...
+          _do_cmd ffmpeg "${FFMPEGPARAMS[@]}" -i "$CURFILE" -vn -acodec copy "$AUDIOFILE"
+          rm "$AUDIOFILE"
+        elif [ "$EXT" == "mpg" ]; then
+          VIDEOFILTERS="idet,yadif=deint=interlaced:mode=1"
+          local AVINPUT=(-i "$CURFILE")
+        else
+          local AVINPUT=(-i "$CURFILE")
+        fi
+        
+        if [ `expr match "$SHORTNAME" '.*-ro.*'` -ne 0 ]; then
+          if [ `expr length "$VIDEOFILTERS"` -gt 0 ]; then
+            VIDEOFILTERS=$VIDEOFILTERS,transpose=1,format=yuv420p
+          else
+            VIDEOFILTERS=transpose=1,format=yuv420p
+          fi
+        elif [ `expr match "$SHORTNAME" '.*-rao.*'` -ne 0 ]; then
+          if [ `expr length "$VIDEOFILTERS"` -gt 0 ]; then
+            VIDEOFILTERS="$VIDEOFILTERS,transpose=2,format=yuv420p"
+          else
+            VIDEOFILTERS="transpose=2,format=yuv420p"
+          fi
+          local VIDEOMETADATA="rotate=0"
+        fi
+        
+        if [ `expr length "$VIDEOFILTERS"` -gt 0 ]; then
+          VIDEOPARAMS+=(-vf $VIDEOFILTERS)
+        fi
+        if [ `expr length "$VIDEOMETADATA"` -gt 0 ]; then
+          VIDEOPARAMS+=(-metadata:s:v $VIDEOMETADATA)
+        fi
+        
+        _log " VIDEOPARAMS: \"${VIDEOPARAMS[@]}\""
+        _log " AUDIOPARAMS: \"${AUDIOPARAMS[@]}\""
+        SF_set_field $SF_ROW 10 "COMPRESSING"
+        local START_TIME=$(date +%s)
+        _do_cmd ffmpeg "${FFMPEGPARAMS[@]}" "${AVINPUT[@]}" -c:v "${VIDEOPARAMS[@]}" -c:a "${AUDIOPARAMS[@]}" "${CFG["OUTDIR"]}/$NEWFILE"
+        _do_cmd exiftool -q -overwrite_original -TagsFromFile "$CURFILE" "${CFG["OUTDIR"]}/$NEWFILE"
+        _do_cmd exiftool -q -overwrite_original -CreateDate="$DATE" "${CFG["OUTDIR"]}/$NEWFILE"
+        local END_TIME=$(date +%s)
+        local ELAPSED_TIME="$((($END_TIME-$START_TIME)/60))m $((($END_TIME-$START_TIME)%60))s"
+        SF_set_field $SF_ROW 10 "COPIED"
+      fi
+    fi
+
+    local OLDSIZE=$(stat -c%s "$CURFILE")
+    local NEWSIZE=$(stat -c%s "${CFG["OUTDIR"]}/$NEWFILE")
+    local SIZEPERC=$(bc <<< "scale=2; $NEWSIZE/$OLDSIZE*100")
+    SF_set_field $SF_ROW 9 "$SIZEPERC%"
+    if [ "$EXT" != "jpg" ]; then
+      _print "STATS: size (N/O) $(bc <<< "scale=2; $NEWSIZE/(1024^2)")/$(bc <<< "scale=2; $OLDSIZE/(1024^2)") MB ($SIZEPERC%), elapsed $ELAPSED_TIME"
+      _log  " STATS: size (N/O) $(bc <<< "scale=2; $NEWSIZE/(1024^2)")/$(bc <<< "scale=2; $OLDSIZE/(1024^2)") MB ($SIZEPERC%), elapsed $ELAPSED_TIME"
+      _print
+    fi      
+    
+  else
+    # Modalità di test
+    SF_set_field $SF_ROW 10 "DONE"
+  fi
+  
+  _log " first_rename: end."
+}
+
+second_rename() {
+  set +x
+  if [ $# != "1" ]; then
+    _print " second_rename: wrong number of params ($#)"
+    exit
+  fi
+  _log " second_rename: begin... param count $# (`join_by ',' "$*"`)"
+  # impostazione dei parametri
+  local OLDNAME="$1"
+  local SF_ROW=$(SF_find_row "$OLDNAME")
+  local ALIAS=$(SF_get_field $SF_ROW 5)
+  local DATE_TIME=$(SF_get_field $SF_ROW 4)
+  local SHORTNAME=$(SF_get_field $SF_ROW 2)
+  local CURFILE=${CFG["OUTDIR"]}/$SHORTNAME
+  #local EXT=`echo $SHORTNAME | cut -d '.' -f2 | tr '[:upper:]' '[:lower:]'`
+  local EXT=""
+  if [[ "$SHORTNAME" =~ \.([A-Za-z 0-9]*)$ ]]; then
+    EXT=$(echo "${BASH_REMATCH[1]}" | tr '[:upper:]' '[:lower:]')
+  fi
+
+  local SPEC=`exiftool -s -csv -d "%Y-%m-%d %H:%M:%S" -CreateDate -Model -Make "$CURFILE" | grep -v SourceFile`
+  local MAKE=`echo ${SPEC}      | cut -d , -f 4 -s`
+  local MODEL=`echo ${SPEC}     | cut -d , -f 3 -s`
+  local DATE=`echo "$DATE_TIME" | awk '{print $1}'`
+  local BASENAME=`basename "$OLDNAME"`
+
+  local COUNT=00
+  while [ -f "${CFG["OUTDIR"]}/$DATE #$COUNT.$EXT" ]; do
+    (( COUNT++ ))
+    if [ $COUNT -lt 10 ]; then
+      COUNT="0"$COUNT
+    fi
+  done
+  _log " FILE @ Date/Make-Count:    $CURFILE @ $DATE / $MAKE - $COUNT"
+
+  local NEWNAME
+  if [ "$EXT" == "jpg" ]; then
+    if [ "$ALIAS" != "NONE" ]; then
+      NEWNAME="$DATE #$COUNT ($MAKE $MODEL)-$ALIAS.$EXT"
+    else
+      NEWNAME="$DATE #$COUNT ($MAKE $MODEL).$EXT"
+    fi
+  else
+    if [ $ALIAS != "NONE" ]; then
+      NEWNAME="$DATE #$COUNT-$ALIAS.$EXT"
+    else
+      NEWNAME="$DATE #$COUNT.$EXT"
+    fi
+  fi
+  SF_set_field $SF_ROW 3 "$NEWNAME"
+  SF_set_field $SF_ROW 6 "$MAKE"
+  SF_set_field $SF_ROW 7 "$MODEL"
+  SF_set_field $SF_ROW 8 "$COUNT"
+
+  _log " NEWNAME: $NEWNAME"
+  if [ "${CFG["TEST"]}" == "NO" ] && [ $(SF_get_field $SF_ROW 10) != "DONE" ]; then
+    _do_cmd mv "$CURFILE" "${CFG["OUTDIR"]}/$NEWNAME"
+    _touch_by_date "$DATE_TIME" "${CFG["OUTDIR"]}/$NEWNAME"
+    SF_set_field $SF_ROW 10 "DONE"
+  fi
+  _log " second_rename: end."
+}
+
+
+# --- Inizio script ---
+_log "---start - $(date -d "now" +"%Y-%m-%d %H:%M")"
+_log "reorgmedia v$VERSION"
+
+_print "reorgmedia v$VERSION"
+_print
+
+_check_for_command "exiftool"
+_check_for_command "column"
+_check_for_command "xset"
+_check_for_command "notify-send"
+
+if [ "$#" == 0 ]; then
+  _usage
+  exit 0
+fi
+
+optstring='c:tpTRfvai:o:P:khqrV'
+while getopts "$optstring" option
+do
+  case "${option}" in
+  h) _usage; exit 0 ;;
+  r) RESUME="YES"; _cfg RESUME YES;;
+  q) _cfg QUIET YES;;
+  k) if [ "$(sudo -n -l shutdown)" == 0 ]; then
+       _cfg POWEROFF YES;
+     else
+       _print "Il comando ""shutdown"" non è abilitato"
+       exit 1
+     fi;;
+  esac
+done
+OPTIND=1
+
+### Verifica se c'è un job interrotto da riprendere (almeno un file con stato NEW o COMPRESSING)
+if [ ! -f "$STFILE" ]; then
+  PENDING_ITEMS=0
+else
+  PENDING_ITEMS=$(sed '1d' $STFILE | grep -E 'NEW|COMPRESSING' | wc -l)
+fi
+if [ "$PENDING_ITEMS" -gt 0 ]; then
+  if [ "${CFG["RESUME"]}" == "NO" ]; then
+    _print "E' stato rilevato un job interrotto ($PENDING_ITEMS elemento/i in sospeso)."
+    _print "%s" "Si desidera continuarlo? [s] "
+    read ANSWER
+    _print
+  else
+    ANSWER="s"
+  fi
+  if [ "$ANSWER" == "s" ] || [ "$ANSWER" == "S" ] || [ "$ANSWER" == "" ]; then
+    _log "RESUME mode"
+    RESUME=YES
+    _loadconfig $CFGDUMP
+    _print "configurazione ripristinata:"
+    _print
+  fi
+fi
+
+# Lettura parametri e verifica configurazione impostata
+if [ "$RESUME" == "NO" ]; then
+  while getopts "$optstring" option
+  do
+    case "${option}" in
+    c) if [ ! -f ${OPTARG} ]; then
+        _print "File non trovato: ${OPTARG}"
+        exit 1
+      else
+        CONFIGFILE=${OPTARG}
+        _loadconfig $CONFIGFILE
+      fi;;
+    esac
+  done
+  OPTIND=1
+
+  while getopts "$optstring" option
+  do
+   case "${option}" in
+   t) _cfg TEST YES;;
+   p) _cfg TEST NO;;
+   T) _cfg TOUCH YES;;
+   R) _cfg RENAME YES;;
+   f) _cfg FOTO YES;;
+   v) _cfg VIDEO YES;;
+   a) _cfg FOTO YES; _cfg VIDEO YES;;
+   i) _cfg INDIR "${OPTARG}";;
+   o) _cfg OUTDIR "${OPTARG}";;
+   P) _cfg PATTERN "${OPTARG}";;
+   V) exit 0;;
+   h) _usage; exit 0 ;;
+   esac
+  done
+  shift $(($OPTIND - 1))
+
+  if [ "${CFG["TOUCH"]}" == "NO" ] && [ "${CFG["RENAME"]}" == "NO" ]; then
+    if [ -z "${CFG["INDIR"]}" ] || [ -z "${CFG["OUTDIR"]}" ]; then
+      _print "E' necessario impostare la directory di input e quella di output."
+      exit 1
+    fi
+  else
+    if [ -z "${CFG["OUTDIR"]}" ]; then
+      _print "E' necessario impostare la directory di output."
+      exit 1
+    fi
+  fi
+  if [ ! -z "${CFG["INDIR"]}" ] && [ ! -d "${CFG["INDIR"]}" ]; then
+    _print "Directory non esistente: ${CFG["INDIR"]}"
+    exit 1
+  fi
+  if [ ! -z "${CFG["OUTDIR"]}" ] && [ ! -d "${CFG["OUTDIR"]}" ]; then
+    _print "Directory non esistente: ${CFG["OUTDIR"]}"
+    exit 1
+  fi
+
+  if [ "${CFG["VIDEO"]}" == "NO" ] && [ "${CFG["FOTO"]}" == "NO" ]; then
+    _cfg FOTO YES; _cfg VIDEO YES;
+  fi
+fi
+
+_print "  DIRECTORY"
+_print "  input:      ${CFG["INDIR"]}"
+_print "  output:     ${CFG["OUTDIR"]}"
+_print
+_print "  PARAMETRI"
+_print "  Test:       ${CFG["TEST"]}"
+_print "  Touch:      ${CFG["TOUCH"]}"
+_print "  Rename:     ${CFG["RENAME"]}"
+_print "  Foto:       ${CFG["FOTO"]}"
+_print "  Video:      ${CFG["VIDEO"]}"
+_print "  Pattern:    ${CFG["PATTERN"]}"
+_print "  Poweroff:   ${CFG["POWEROFF"]}"
+_print
+
+_log "$(_cfgprint)"
+
+if [ "${CFG["QUIET"]}" == "NO" ]; then
+  _print "%s" "Vuoi procedere con la configurazione attuale? [s] "
+  read ANSWER
+  if [ "$ANSWER" != "s" ] && [ "$ANSWER" != "S" ] && [ "$ANSWER" != "" ]; then
+     _print "Uscita..."
+     _log "---end - `date -d "now" +"%Y-%m-%d %H:%M"`"
+     exit 0;
+  fi
+fi
+_cfg_dump "$CFGDUMP"
+
+# --- MAIN ---
+set +x
+OLDIFS=$IFS
+IFS=$'\n'
+
+if [ "$RESUME" == "NO" ]; then
+  # Ripulisco il file di stato dall'esito del job precedente.
+  SF_clear
+fi
+
+if [ "${CFG["TOUCH"]}" == "YES" ]; then
+  # Sezione touch - si esegue il touch dei file in OUTDIR e si esce.
+  _fill_file_list "${CFG["OUTDIR"]}"
+
+  _print "%-50s %-22s\n" "FILE" "DATE"
+  while read F
+  do
+    _touch_file $F
+  done < $FILELIST
+
+elif [ "${CFG["RENAME"]}" == "YES" ]; then
+  _log "RENAME mode"
+  OUTDIRTMP="${CFG["OUTDIR"]}/.reorg"
+  
+  # Creo l'elenco dei soli file .jpg e .mp4 nella OUTDIR
+  _fill_file_list "${CFG["OUTDIR"]}" "strict"
+
+  if [ "${CFG["TEST"]}" == "NO" ]; then
+    _do_cmd mkdir -p "$OUTDIRTMP"
+    _do_cmd rm -f "$OUTDIRTMP/*"
+
+    while read F
+    do
+      _do_cmd mv "$F" "$OUTDIRTMP/"
+    done < $FILELIST
+
+    SF_clear
+    _fill_file_list "$OUTDIRTMP" "strict"
+  fi
+
+fi
+
+if [ "${CFG["TOUCH"]}" == "NO" ]; then
+  # Esecuzione completa - si esegue la trasformazione dei file su INDIR e si rinominano/convertono su OUTDIR
+  if [ "$RESUME" == "NO" ] && [ "${CFG["RENAME"]}" == "NO" ]; then
+    # Genero la lista dei file da processare
+    _fill_file_list "${CFG["INDIR"]}"
+  fi
+
+  _print
+  _print "FASE 1"
+  # I file vengono posizionati nella cartella d'arrivo, eventualmente compressi, con un nome temporaneo
+
+  _print "%-50s %-22s %-14s %-35s\n"  "FILE IN INPUT" "DATA" "ALIAS" "NUOVO FILE"
+
+  while read F
+  do
+    first_rename "$F"
+  done < $FILELIST
+
+  if [ "${CFG["TEST"]}" == "NO" ]; then
+    _print
+    _print "FASE 2"
+
+    # Aggiorno i file copiati nella fase 1, rinominandoli secondo il formato "2013-07-14 #01 (NIKON xxx).yyy"
+    STFILE_TMP=$WORKINGDIR/status-new.list
+    sed -n '1p' $STFILE > $STFILE_TMP
+    sed '1d' $STFILE | sort --field-separator=';' --key=2 >> $STFILE_TMP
+    mv $STFILE_TMP $STFILE
+    unset STFILE_TMP
+
+    sed '1d' $STFILE | while read ROW; do
+       F=$(echo $ROW | cut -d ";" -f 1)
+       second_rename "$F"
+    done
+    _print "$(column -s ";" -t "$STFILE" -n)"
+    cat "$STFILE" >> $LOGFILE
+
+    if [ "${CFG["RENAME"]}" == "YES" ]; then
+      rmdir "$OUTDIRTMP"
+    fi
+
+  fi
+fi
+
+# Notifiche di fine attività ed eventuale poweroff (se il monitor è spento)
+
+notify-send -u normal "reorgmedia" "Esecuzione completata"
+_log "---end   - `date -d "now" +"%Y-%m-%d %H:%M"`"
+IFS=$OLDIFS
+
+if [ "${CFG["POWEROFF"]}" == "YES" ]; then
+  _log "Poweroff richiesto"
+  MONITOR=$(xset q | grep "Monitor is" | awk '{print $3}')
+
+  if [ "$MONITOR" == "Off" ]; then
+    _log "Monitor in standby, avvio lo shutdown..."
+    _do_cmd sudo shutdown -h now
+  else
+    _log "Monitor in stato $MONITOR, poweroff annullato."
+  fi
+fi
