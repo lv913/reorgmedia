@@ -4,7 +4,7 @@
 # email:  liv913@gmail.com
 # date:   15/Mar/2018
 
-VERSION=3.0k
+VERSION=3.1
 
 WORKINGDIR=$(dirname "$0")
 LOGFILE=$WORKINGDIR/log.txt
@@ -278,24 +278,30 @@ _fill_file_list() {
 
 _get_file_createdate() {
   # Estrae la data di creazione in base a vari criteri
-  # Campi in input: SPEC e FILE (nome file inclusivo di path)
+  # Campi in input: SPEC (opzionalmente vuoto) e FILE (nome file inclusivo di path)
   local SPEC=$1
   local FILE=$2
 
-  #local EXT=$(echo $FILE | cut -d '.' -f2 | tr '[:upper:]' '[:lower:]')
+  if [ -z "$SPEC" ]; then
+    SPEC=$(exiftool -s -csv -d "%Y-%m-%d %H:%M:%S" -CreateDate -Model -Make -DateTimeOriginal "$CURFILE" | grep -v SourceFile)
+  fi
+
   local EXT=""
   if [[ "$FILE" =~ \.([A-Za-z 0-9]*)$ ]]; then
     EXT=$(echo "${BASH_REMATCH[1]}" | tr '[:upper:]' '[:lower:]')
   fi
   local SHORTNAME=$(basename "$FILE")
   local DATE=$(echo ${SPEC} | cut -d , -f 2 -s)
+  if [ "$DATE" == "" ]; then
+    DATE==$(echo ${SPEC} | cut -d , -f 5 -s)
+  fi
 
   if [ "$DATE" == "" ] || [ `expr match "$DATE" '0000.*'` -ne 0 ]; then
     if [[ ("$EXT" == "mpg" && "$SHORTNAME" =~ M2U[0-9]+) || "$EXT" == "webm" ]]; then
       # viene dalla videocamera; prendo per buona la data di ultima modifica
-      local DATE=`stat -c %y $FILE | cut -d '.' -f 1`
+      DATE=$(stat -c %y $FILE | cut -d '.' -f 1)
     else
-      local DATE="2001-01-01 00:00:00";
+      DATE="2001-01-01 00:00:00"
     fi
   fi
 
@@ -345,8 +351,9 @@ _touch_file() {
   local FILE=$1
   local SHORTNAME=$(basename "$FILE")
   local SF_ROW=$(SF_find_row "$SHORTNAME")
-  local SPEC=`exiftool -s -csv -d "%Y-%m-%d %H:%M:%S" -CreateDate "$FILE" | grep -v SourceFile`
-  local DATE=$(_get_file_createdate "$SPEC" "$FILE")
+  #local SPEC=$(exiftool -s -csv -d "%Y-%m-%d %H:%M:%S" -CreateDate -Model -Make -DateTimeOriginal "$FILE" | grep -v SourceFile)
+  #local DATE=$(_get_file_createdate "$SPEC" "$FILE")
+  local DATE=$(_get_file_createdate "" "$FILE")
   _print "%-50s %-22s\n" "$(basename ""$FILE"")" "$DATE"
 
   if [ "${CFG["TEST"]}" == "NO" ]; then
@@ -384,11 +391,16 @@ first_rename() {
     return
   fi
 
-  local SPEC=`exiftool -s -csv -d "%Y-%m-%d %H:%M:%S" -CreateDate -Model -Make "$CURFILE" | grep -v SourceFile`
-  local DATE=`echo ${SPEC} | cut -d , -f 2 -s`
-  if [ "$DATE" == "" ] || [ `expr match "$DATE" '0000.*'` -ne 0 ]; then
-    DATE=$(_get_file_createdate "$SPEC" "$CURFILE")
-  fi
+  #local SPEC=$(exiftool -s -csv -d "%Y-%m-%d %H:%M:%S" -CreateDate -Model -Make -DateTimeOriginal "$CURFILE" | grep -v SourceFile)
+  #local DATE=$(_get_file_createdate "$SPEC" "$CURFILE")
+  local DATE=$(_get_file_createdate "" "$CURFILE")
+  #local DATE=$(echo ${SPEC} | cut -d , -f 2 -s)
+  #if [ "$DATE" == "" ]; then
+  #  DATE==$(echo ${SPEC} | cut -d , -f 5 -s)
+  #fi
+  #if [ "$DATE" == "" ] || [ `expr match "$DATE" '0000.*'` -ne 0 ]; then
+  #  DATE=$(_get_file_createdate "$SPEC" "$CURFILE")
+  #fi
 
   local ALIAS=$(_get_alias $SHORTNAME)
      

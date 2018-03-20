@@ -2,9 +2,9 @@
 # reorgmedia
 # author: lv913
 # email:  liv913@gmail.com
-# date:   15/Mar/2018
+# date:   20/Mar/2018
 
-VERSION=1.2
+VERSION=1.3
 
 WORKINGDIR=$(dirname "$0")
 
@@ -103,10 +103,13 @@ _list() {
     if [[ "$FILENAME" =~ \.([A-Za-z 0-9]*)$ ]]; then
       EXT=$(echo "${BASH_REMATCH[1]}" | tr '[:upper:]' '[:lower:]')
     fi
-    local SPEC=$(exiftool -s -csv -d "%Y-%m-%d %H:%M:%S" -CreateDate -Model -Make "$f" | grep -v SourceFile)
+    local SPEC=$(exiftool -s -csv -d "%Y-%m-%d %H:%M:%S" -CreateDate -Model -Make -DateTimeOriginal "$f" | grep -v SourceFile)
     local MAKE=$(echo ${SPEC}  | cut -d , -f 4 -s)
     local MODEL=$(echo ${SPEC} | cut -d , -f 3 -s)
     local DATE=$(echo ${SPEC} | cut -d , -f 2 -s)
+    if [ "$DATE" == "" ]; then
+      DATE==$(echo ${SPEC} | cut -d , -f 5 -s)
+    fi
     local DURATION=""
     if [ $(containsElement "$EXT" "${VIDEOEXT[@]}") -eq 0 ]; then
       DURATION=$(exiftool -f -s3 -Duration -n "$f" | cut -d . -f 1)
