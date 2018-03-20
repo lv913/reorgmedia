@@ -105,10 +105,10 @@ _list() {
     fi
     local SPEC=$(exiftool -s -csv -d "%Y-%m-%d %H:%M:%S" -CreateDate -Model -Make -DateTimeOriginal "$f" | grep -v SourceFile)
     local MAKE=$(echo ${SPEC}  | cut -d , -f 4 -s)
-    local MODEL=$(echo ${SPEC} | cut -d , -f 3 -s)
+    local MODEL=$(echo ${SPEC} | cut -d , -f 3 -s | sed 's/^[" ]*//g' | sed 's/[" ]*$//g')
     local DATE=$(echo ${SPEC} | cut -d , -f 2 -s)
     if [ "$DATE" == "" ]; then
-      DATE==$(echo ${SPEC} | cut -d , -f 5 -s)
+      DATE=$(echo ${SPEC} | cut -d , -f 5 -s)
     fi
     local DURATION=""
     if [ $(containsElement "$EXT" "${VIDEOEXT[@]}") -eq 0 ]; then

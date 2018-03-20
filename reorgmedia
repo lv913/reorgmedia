@@ -2,9 +2,9 @@
 # reorgmedia
 # author: lv913
 # email:  liv913@gmail.com
-# date:   15/Mar/2018
+# date:   20/Mar/2018
 
-VERSION=3.1
+VERSION=3.2
 
 WORKINGDIR=$(dirname "$0")
 LOGFILE=$WORKINGDIR/log.txt
@@ -38,7 +38,7 @@ _log() {
   IFS=$OLDIFS
   local YEL='\033[0;32m'  # Color
   local NC='\033[0m'      # No color
-  local V=`join_by " " $*`
+  local V=$(join_by " " $*)
   echo -e "[$(date +"%Y-%m-%d %H:%M:%S")]: $V" >> $LOGFILE
   if [ "$DEBUG" == "YES" ]; then
     echo -e "[$(date +"%Y-%m-%d %H:%M:%S")]: ${YEL}$V${NC}"
@@ -181,7 +181,7 @@ function join_by { local d=$1; shift; echo -n "$1"; shift; printf "%s" "${@/#/$d
 
 # containsElement: verifica se un elemento è incluso in un array
 # es. AR=( mp4 avi mov mkv mpg webm )
-#     if [ `containsElement mp4 ${AR[@]}` -eq 1 ]; then echo ok; fi -> 'ok'
+#     if [ $(containsElement mp4 ${AR[@]}) -eq 1 ]; then echo ok; fi -> 'ok'
 function containsElement { local e match="$1"; shift; for e; do [[ "$e" == "$match" ]] && echo 0 && return 0; done; echo 1 && return 1; }
 
 # SF - Status File functions
@@ -293,10 +293,10 @@ _get_file_createdate() {
   local SHORTNAME=$(basename "$FILE")
   local DATE=$(echo ${SPEC} | cut -d , -f 2 -s)
   if [ "$DATE" == "" ]; then
-    DATE==$(echo ${SPEC} | cut -d , -f 5 -s)
+    DATE=$(echo ${SPEC} | cut -d , -f 5 -s)
   fi
 
-  if [ "$DATE" == "" ] || [ `expr match "$DATE" '0000.*'` -ne 0 ]; then
+  if [ "$DATE" == "" ] || [ $(expr match "$DATE" '0000.*') -ne 0 ]; then
     if [[ ("$EXT" == "mpg" && "$SHORTNAME" =~ M2U[0-9]+) || "$EXT" == "webm" ]]; then
       # viene dalla videocamera; prendo per buona la data di ultima modifica
       DATE=$(stat -c %y $FILE | cut -d '.' -f 1)
@@ -312,7 +312,6 @@ _get_alias() {
   # Estrae un eventuale alias dal nome del file
   # Campi in input: FILE (nome file con o senza path)
   local FILE=$(basename "$1")
-  #local EXT=$(echo $FILE | cut -d '.' -f2 | tr '[:upper:]' '[:lower:]')
   local EXT=""
   if [[ "$FILE" =~ \.([A-Za-z 0-9]*)$ ]]; then
     EXT=$(echo "${BASH_REMATCH[1]}" | tr '[:upper:]' '[:lower:]')
@@ -347,12 +346,10 @@ _touch_file() {
     _print " _touch_file: wrong number of params ($#)"
     exit
   fi
-  _log " _touch_file: begin... param count $# (`join_by ',' "$*"`)"
+  _log " _touch_file: begin... param count $# ($(join_by ',' "$*"))"
   local FILE=$1
   local SHORTNAME=$(basename "$FILE")
   local SF_ROW=$(SF_find_row "$SHORTNAME")
-  #local SPEC=$(exiftool -s -csv -d "%Y-%m-%d %H:%M:%S" -CreateDate -Model -Make -DateTimeOriginal "$FILE" | grep -v SourceFile)
-  #local DATE=$(_get_file_createdate "$SPEC" "$FILE")
   local DATE=$(_get_file_createdate "" "$FILE")
   _print "%-50s %-22s\n" "$(basename ""$FILE"")" "$DATE"
 
@@ -371,11 +368,10 @@ first_rename() {
     _print " first_rename: begin... wrong number of params ($#)"
     exit
   fi
-  _log " first_rename: begin... param count $# (`join_by ',' "$*"`)"
+  _log " first_rename: begin... param count $# ($(join_by ',' "$*"))"
   # impostazione dei parametri
   local CURFILE=$(echo $1)
   local SHORTNAME=$(basename "$CURFILE")
-  #local EXT=$(echo $SHORTNAME | cut -d '.' -f2 | tr '[:upper:]' '[:lower:]')
   local EXT=""
   if [[ "$SHORTNAME" =~ \.([A-Za-z 0-9]*)$ ]]; then
     EXT=$(echo "${BASH_REMATCH[1]}" | tr '[:upper:]' '[:lower:]')
@@ -391,29 +387,19 @@ first_rename() {
     return
   fi
 
-  #local SPEC=$(exiftool -s -csv -d "%Y-%m-%d %H:%M:%S" -CreateDate -Model -Make -DateTimeOriginal "$CURFILE" | grep -v SourceFile)
-  #local DATE=$(_get_file_createdate "$SPEC" "$CURFILE")
   local DATE=$(_get_file_createdate "" "$CURFILE")
-  #local DATE=$(echo ${SPEC} | cut -d , -f 2 -s)
-  #if [ "$DATE" == "" ]; then
-  #  DATE==$(echo ${SPEC} | cut -d , -f 5 -s)
-  #fi
-  #if [ "$DATE" == "" ] || [ `expr match "$DATE" '0000.*'` -ne 0 ]; then
-  #  DATE=$(_get_file_createdate "$SPEC" "$CURFILE")
-  #fi
-
   local ALIAS=$(_get_alias $SHORTNAME)
      
   _log " FILE & CREATEDATE: $SHORTNAME & $DATE"
   if [ "$EXT" == "jpg" ]; then
-    local NUM=`find -L "${CFG["OUTDIR"]}" -name "D $DATE*.$EXT" | wc -l | awk '{print $1}'`
+    local NUM=$(find -L "${CFG["OUTDIR"]}" -name "D $DATE*.$EXT" | wc -l | awk '{print $1}')
     NUM=$((NUM+1))
     local NEWFILE=$(SF_get_field $SF_ROW 2)
     if [ "$NEWFILE" == "" ]; then
       NEWFILE="D $DATE $NUM.$EXT"
     fi
   else
-    local NUM=`find -L "${CFG["OUTDIR"]}" -name "D $DATE*.mp4" | wc -l | awk '{print $1}'`
+    local NUM=$(find -L "${CFG["OUTDIR"]}" -name "D $DATE*.mp4" | wc -l | awk '{print $1}')
     NUM=$((NUM+1))
     local NEWFILE=$(SF_get_field $SF_ROW 2)
     if [ "$NEWFILE" == "" ]; then
@@ -474,7 +460,6 @@ first_rename() {
           AUDIOPARAMS+=(aac -strict experimental -ab 32k)
         else
           # Edit: https://ffmpeg.zeranoe.com/forum/viewtopic.php?t=468
-          # AUDIOPARAMS+=(copy)
           AUDIOPARAMS+=(aac)
         fi
         local AUDIOCODEC=$(ffprobe "$CURFILE" -show_streams -select_streams a -v quiet | grep codec_name | cut -d = -f 2)
@@ -500,14 +485,14 @@ first_rename() {
           local AVINPUT=(-i "$CURFILE")
         fi
         
-        if [ `expr match "$SHORTNAME" '.*-ro.*'` -ne 0 ]; then
-          if [ `expr length "$VIDEOFILTERS"` -gt 0 ]; then
+        if [ $(expr match "$SHORTNAME" '.*-ro.*') -ne 0 ]; then
+          if [ $(expr length "$VIDEOFILTERS") -gt 0 ]; then
             VIDEOFILTERS=$VIDEOFILTERS,transpose=1,format=yuv420p
           else
             VIDEOFILTERS=transpose=1,format=yuv420p
           fi
-        elif [ `expr match "$SHORTNAME" '.*-rao.*'` -ne 0 ]; then
-          if [ `expr length "$VIDEOFILTERS"` -gt 0 ]; then
+        elif [ $(expr match "$SHORTNAME" '.*-rao.*') -ne 0 ]; then
+          if [ $(expr length "$VIDEOFILTERS") -gt 0 ]; then
             VIDEOFILTERS="$VIDEOFILTERS,transpose=2,format=yuv420p"
           else
             VIDEOFILTERS="transpose=2,format=yuv420p"
@@ -515,10 +500,10 @@ first_rename() {
           local VIDEOMETADATA="rotate=0"
         fi
         
-        if [ `expr length "$VIDEOFILTERS"` -gt 0 ]; then
+        if [ $(expr length "$VIDEOFILTERS") -gt 0 ]; then
           VIDEOPARAMS+=(-vf $VIDEOFILTERS)
         fi
-        if [ `expr length "$VIDEOMETADATA"` -gt 0 ]; then
+        if [ $(expr length "$VIDEOMETADATA") -gt 0 ]; then
           VIDEOPARAMS+=(-metadata:s:v $VIDEOMETADATA)
         fi
         
@@ -559,7 +544,7 @@ second_rename() {
     _print " second_rename: wrong number of params ($#)"
     exit
   fi
-  _log " second_rename: begin... param count $# (`join_by ',' "$*"`)"
+  _log " second_rename: begin... param count $# ($(join_by ',' "$*"))"
   # impostazione dei parametri
   local OLDNAME="$1"
   local SF_ROW=$(SF_find_row "$OLDNAME")
@@ -567,17 +552,16 @@ second_rename() {
   local DATE_TIME=$(SF_get_field $SF_ROW 4)
   local SHORTNAME=$(SF_get_field $SF_ROW 2)
   local CURFILE=${CFG["OUTDIR"]}/$SHORTNAME
-  #local EXT=`echo $SHORTNAME | cut -d '.' -f2 | tr '[:upper:]' '[:lower:]'`
   local EXT=""
   if [[ "$SHORTNAME" =~ \.([A-Za-z 0-9]*)$ ]]; then
     EXT=$(echo "${BASH_REMATCH[1]}" | tr '[:upper:]' '[:lower:]')
   fi
 
-  local SPEC=`exiftool -s -csv -d "%Y-%m-%d %H:%M:%S" -CreateDate -Model -Make "$CURFILE" | grep -v SourceFile`
-  local MAKE=`echo ${SPEC}      | cut -d , -f 4 -s`
-  local MODEL=`echo ${SPEC}     | cut -d , -f 3 -s`
-  local DATE=`echo "$DATE_TIME" | awk '{print $1}'`
-  local BASENAME=`basename "$OLDNAME"`
+  local SPEC=$(exiftool -s -csv -d "%Y-%m-%d %H:%M:%S" -CreateDate -Model -Make "$CURFILE" | grep -v SourceFile)
+  local MAKE=$(echo ${SPEC}      | cut -d , -f 4 -s)
+  local MODEL=$(echo ${SPEC} | cut -d , -f 3 -s | sed 's/^[" ]*//g' | sed 's/[" ]*$//g')
+  local DATE=$(echo "$DATE_TIME" | awk '{print $1}')
+  local BASENAME=$(basename "$OLDNAME")
 
   local COUNT=00
   while [ -f "${CFG["OUTDIR"]}/$DATE #$COUNT.$EXT" ]; do
@@ -756,7 +740,7 @@ if [ "${CFG["QUIET"]}" == "NO" ]; then
   read ANSWER
   if [ "$ANSWER" != "s" ] && [ "$ANSWER" != "S" ] && [ "$ANSWER" != "" ]; then
      _print "Uscita..."
-     _log "---end - `date -d "now" +"%Y-%m-%d %H:%M"`"
+     _log "---end - $(date -d "now" +"%Y-%m-%d %H:%M")"
      exit 0;
   fi
 fi
@@ -850,7 +834,7 @@ fi
 # Notifiche di fine attività ed eventuale poweroff (se il monitor è spento)
 
 notify-send -u normal "reorgmedia" "Esecuzione completata"
-_log "---end   - `date -d "now" +"%Y-%m-%d %H:%M"`"
+_log "---end   - $(date -d "now" +"%Y-%m-%d %H:%M")"
 IFS=$OLDIFS
 
 if [ "${CFG["POWEROFF"]}" == "YES" ]; then
