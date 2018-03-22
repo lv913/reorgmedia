@@ -2,9 +2,9 @@
 # reorgmedia
 # author: lv913
 # email:  liv913@gmail.com
-# date:   20/Mar/2018
+# date:   21/Mar/2018
 
-VERSION=3.2
+VERSION=3.0
 
 WORKINGDIR=$(dirname "$0")
 LOGFILE=$WORKINGDIR/log.txt
@@ -101,7 +101,7 @@ cat <<EOF
           -v              Opera sui soli video ($(join_by ', ' ${VIDEOEXT[@]})).
           -i DIR          Specifica la directory di input.
           -o DIR          Specifica la directory di destinazione.
-          -P PATTERN      Specifica il pattern dei file da includere.
+          -P PATTERN      Specifica il pattern dei file in input da includere.
           -r              Se è presente un job interrotto, ne esegue il resume senza chiedere conferma.
           -q              Non richiede interazione utente e procede con l'esecuzione configurata;
                           non procede col resume, a meno che non sia impostato anche -r.
@@ -291,14 +291,17 @@ _get_file_createdate() {
     EXT=$(echo "${BASH_REMATCH[1]}" | tr '[:upper:]' '[:lower:]')
   fi
   local SHORTNAME=$(basename "$FILE")
-  local DATE=$(echo ${SPEC} | cut -d , -f 2 -s)
+  local DATE
+  # CreateDate:
+  DATE=$(echo ${SPEC} | cut -d , -f 2 -s)
   if [ "$DATE" == "" ]; then
+    # DateTimeOriginal:
     DATE=$(echo ${SPEC} | cut -d , -f 5 -s)
   fi
 
-  if [ "$DATE" == "" ] || [ $(expr match "$DATE" '0000.*') -ne 0 ]; then
+  if [ -z "$DATE" ] || [[ "$DATE" =~ ^0000.* ]]; then
     if [[ ("$EXT" == "mpg" && "$SHORTNAME" =~ M2U[0-9]+) || "$EXT" == "webm" ]]; then
-      # viene dalla videocamera; prendo per buona la data di ultima modifica
+      # viene dalla videocamera o dalla webcam; prendo per buona la data di ultima modifica
       DATE=$(stat -c %y $FILE | cut -d '.' -f 1)
     else
       DATE="2001-01-01 00:00:00"
@@ -340,7 +343,7 @@ _touch_by_date() {
 }
 
 _touch_file() {
-  # Estrae la data corretta (CreateDate o data di ultima modifica) ed esegue il touch
+  # Estrae la data di creazione ed esegue il touch
   set +x
   if [ $# != "1" ]; then
     _print " _touch_file: wrong number of params ($#)"
@@ -427,9 +430,14 @@ first_rename() {
 
     elif [ $(containsElement "$EXT" "${VIDEOEXT[@]}") -eq 0 ]; then
       # è un video; lo copio o devo comprimerlo?
+      local ROTATION=$(exiftool -f -s -csv -Rotation "$CURFILE" | grep -v SourceFile | cut -d , -f 2)
+      if [ "$ROTATION" == "-" ]; then
+        ROTATION="0"
+      fi
+      _log " ROTATION: $ROTATION"
       local COMPRESSIONREQUIRED=0
       if [ "$EXT" == "mp4" ]; then
-        local MINORVERSION=$(exiftool "$CURFILE"| grep "Minor Version" | cut -d ":" -f 2 | awk '{print $1}')
+        local MINORVERSION=$(exiftool "$CURFILE" | grep "Minor Version" | cut -d ":" -f 2 | awk '{print $1}')
         if [ "$MINORVERSION" != "0.0.0" ]; then
           # Compressione non richiesta
           _log " COMPRESSIONREQUIRED: 0"
@@ -453,7 +461,8 @@ first_rename() {
         FFMPEGPARAMS+=(-nostdin)
         FFMPEGPARAMS+=(-y)
         FFMPEGPARAMS+=(-flags global_header)
-        FFMPEGPARAMS+=(-noautorotate)
+        # Rimosso: https://trac.ffmpeg.org/ticket/4612
+        #FFMPEGPARAMS+=(-noautorotate)
         local AUDIOFORMAT=$(exiftool "$CURFILE" | grep "Audio Format" | awk '{print $4}')
         local AUDIOPARAMS=()
         if [ "$AUDIOFORMAT" == "raw" ]; then
@@ -472,38 +481,40 @@ first_rename() {
         VIDEOPARAMS+=(-subcmp 2)
         VIDEOPARAMS+=(-g 45)
         local VIDEOFILTERS
+        local AVINPUT
         if [ "$EXT" == "avi" ] && [ "$AUDIOCODEC" == "pcm_u8" ]; then
+          # Procedura da verificare!
           local AUDIOFILE=${CFG["OUTDIR"]}/$SHORTNAME.wav
-          local AVINPUT=(-i "$CURFILE" -i "$AUDIOFILE" -map 0:0 -map 1:0)
+          AVINPUT=(-i "$CURFILE" -i "$AUDIOFILE" -map 0:0 -map 1:0)
           AUDIOPARAMS=(libmp3lame -ar 44100 -aq 0) # verificare se ha senso...
           _do_cmd ffmpeg "${FFMPEGPARAMS[@]}" -i "$CURFILE" -vn -acodec copy "$AUDIOFILE"
-          rm "$AUDIOFILE"
+          rm "$AUDIOFILE" # lo cancello prima di usarlo???
         elif [ "$EXT" == "mpg" ]; then
           VIDEOFILTERS="idet,yadif=deint=interlaced:mode=1"
-          local AVINPUT=(-i "$CURFILE")
+          AVINPUT=(-i "$CURFILE")
         else
-          local AVINPUT=(-i "$CURFILE")
+          AVINPUT=(-i "$CURFILE")
         fi
         
-        if [ $(expr match "$SHORTNAME" '.*-ro.*') -ne 0 ]; then
-          if [ $(expr length "$VIDEOFILTERS") -gt 0 ]; then
-            VIDEOFILTERS=$VIDEOFILTERS,transpose=1,format=yuv420p
+        if [[ "$SHORTNAME" =~ .*-ro\..* ]] && [ "$ROTATION" == "0" ]; then
+          if [ ! -z "$VIDEOFILTERS" ]; then
+            VIDEOFILTERS="$VIDEOFILTERS,transpose=clock,format=yuv420p"
           else
-            VIDEOFILTERS=transpose=1,format=yuv420p
+            VIDEOFILTERS="transpose=clock,format=yuv420p"
           fi
-        elif [ $(expr match "$SHORTNAME" '.*-rao.*') -ne 0 ]; then
-          if [ $(expr length "$VIDEOFILTERS") -gt 0 ]; then
-            VIDEOFILTERS="$VIDEOFILTERS,transpose=2,format=yuv420p"
+        elif [[ "$SHORTNAME" =~ .*-rao\..* ]] && [ "$ROTATION" == "0" ]; then
+          if [ ! -z "$VIDEOFILTERS" ]; then
+            VIDEOFILTERS="$VIDEOFILTERS,transpose=cclock,format=yuv420p"
           else
-            VIDEOFILTERS="transpose=2,format=yuv420p"
+            VIDEOFILTERS="transpose=cclock,format=yuv420p"
           fi
           local VIDEOMETADATA="rotate=0"
         fi
         
-        if [ $(expr length "$VIDEOFILTERS") -gt 0 ]; then
+        if [ ! -z "$VIDEOFILTERS" ]; then
           VIDEOPARAMS+=(-vf $VIDEOFILTERS)
         fi
-        if [ $(expr length "$VIDEOMETADATA") -gt 0 ]; then
+        if [ ! -z "$VIDEOMETADATA" ]; then
           VIDEOPARAMS+=(-metadata:s:v $VIDEOMETADATA)
         fi
         
