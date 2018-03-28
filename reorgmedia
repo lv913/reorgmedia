@@ -476,10 +476,12 @@ first_rename() {
         VIDEOPARAMS+=(libx264)
         VIDEOPARAMS+=(-preset slower)
         VIDEOPARAMS+=(-crf 20)
+        VIDEOPARAMS+=(-vsync 0)
         VIDEOPARAMS+=(-bf 2)
         VIDEOPARAMS+=(-cmp 2)
         VIDEOPARAMS+=(-subcmp 2)
         VIDEOPARAMS+=(-g 45)
+        VIDEOPARAMS+=(-metadata:s:v:0 rotate=0)
         local VIDEOFILTERS
         local AVINPUT
         if [ "$EXT" == "avi" ] && [ "$AUDIOCODEC" == "pcm_u8" ]; then
@@ -575,7 +577,13 @@ second_rename() {
   local BASENAME=$(basename "$OLDNAME")
 
   local COUNT=00
-  while [ -f "${CFG["OUTDIR"]}/$DATE #$COUNT.$EXT" ]; do
+  _log $DATE
+  _log $COUNT
+  _log $EXT
+  _log $(find "${CFG["OUTDIR"]}")
+  _log $(find "${CFG["OUTDIR"]}" -iname "$DATE #$COUNT*.$EXT")
+  _log $(find "${CFG["OUTDIR"]}" -iname "$DATE #$COUNT*.$EXT" | wc -l)
+  while [ "$(find "${CFG["OUTDIR"]}" -iname "$DATE #$COUNT*.$EXT" | wc -l)" -ne "0" ]; do
     (( COUNT++ ))
     if [ $COUNT -lt 10 ]; then
       COUNT="0"$COUNT
@@ -696,8 +704,8 @@ if [ "$RESUME" == "NO" ]; then
    f) _cfg FOTO YES;;
    v) _cfg VIDEO YES;;
    a) _cfg FOTO YES; _cfg VIDEO YES;;
-   i) _cfg INDIR "${OPTARG}";;
-   o) _cfg OUTDIR "${OPTARG}";;
+   i) _cfg INDIR "${OPTARG%/}";;
+   o) _cfg OUTDIR "${OPTARG%/}";;
    P) _cfg PATTERN "${OPTARG}";;
    V) exit 0;;
    h) _usage; exit 0 ;;
