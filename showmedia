@@ -103,12 +103,12 @@ _list() {
     if [[ "$FILENAME" =~ \.([A-Za-z 0-9]*)$ ]]; then
       EXT=$(echo "${BASH_REMATCH[1]}" | tr '[:upper:]' '[:lower:]')
     fi
-    local SPEC=$(exiftool -s -csv -d "%Y-%m-%d %H:%M:%S" -CreateDate -Model -Make -DateTimeOriginal "$f" | grep -v SourceFile)
-    local MAKE=$(echo ${SPEC}  | cut -d , -f 4 -s)
-    local MODEL=$(echo ${SPEC} | cut -d , -f 3 -s | sed 's/^[" ]*//g' | sed 's/[" ]*$//g')
-    local DATE=$(echo ${SPEC} | cut -d , -f 2 -s)
+    local SPEC=$(exiftool -f -s -csv -d "%Y-%m-%d %H:%M:%S" -CreateDate -Model -Make -DateTimeOriginal "$f" | grep -v SourceFile)
+    local MAKE=$(echo ${SPEC}  | cut -d , -f 4 -s | sed 's/^-$//')
+    local MODEL=$(echo ${SPEC} | cut -d , -f 3 -s | sed 's/^[" ]*//g' | sed 's/[" ]*$//g' | sed 's/^-$//')
+    local DATE=$(echo ${SPEC} | cut -d , -f 2 -s | sed 's/^-$//')
     if [ "$DATE" == "" ]; then
-      DATE=$(echo ${SPEC} | cut -d , -f 5 -s)
+      DATE=$(echo ${SPEC} | cut -d , -f 5 -s | sed 's/^-$//')
     fi
     local DURATION=""
     if [ $(containsElement "$EXT" "${VIDEOEXT[@]}") -eq 0 ]; then

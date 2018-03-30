@@ -2,7 +2,7 @@
 # reorgmedia
 # author: lv913
 # email:  liv913@gmail.com
-# date:   21/Mar/2018
+# date:   30/Mar/2018
 
 VERSION=3.0
 
@@ -461,7 +461,7 @@ first_rename() {
         FFMPEGPARAMS+=(-nostdin)
         FFMPEGPARAMS+=(-y)
         FFMPEGPARAMS+=(-flags global_header)
-        # Rimosso: https://trac.ffmpeg.org/ticket/4612
+        # Removed: https://trac.ffmpeg.org/ticket/4612
         #FFMPEGPARAMS+=(-noautorotate)
         local AUDIOFORMAT=$(exiftool "$CURFILE" | grep "Audio Format" | awk '{print $4}')
         local AUDIOPARAMS=()
@@ -477,10 +477,6 @@ first_rename() {
         VIDEOPARAMS+=(-preset slower)
         VIDEOPARAMS+=(-crf 20)
         VIDEOPARAMS+=(-vsync 0)
-        VIDEOPARAMS+=(-bf 2)
-        VIDEOPARAMS+=(-cmp 2)
-        VIDEOPARAMS+=(-subcmp 2)
-        VIDEOPARAMS+=(-g 45)
         VIDEOPARAMS+=(-metadata:s:v:0 rotate=0)
         local VIDEOFILTERS
         local AVINPUT
@@ -570,26 +566,20 @@ second_rename() {
     EXT=$(echo "${BASH_REMATCH[1]}" | tr '[:upper:]' '[:lower:]')
   fi
 
-  local SPEC=$(exiftool -s -csv -d "%Y-%m-%d %H:%M:%S" -CreateDate -Model -Make "$CURFILE" | grep -v SourceFile)
-  local MAKE=$(echo ${SPEC}      | cut -d , -f 4 -s)
-  local MODEL=$(echo ${SPEC} | cut -d , -f 3 -s | sed 's/^[" ]*//g' | sed 's/[" ]*$//g')
+  local SPEC=$(exiftool -f -s -csv -d "%Y-%m-%d %H:%M:%S" -CreateDate -Model -Make "$CURFILE" | grep -v SourceFile)
+  local MAKE=$(echo ${SPEC}  | cut -d , -f 4 -s | sed 's/^-$//')
+  local MODEL=$(echo ${SPEC} | cut -d , -f 3 -s | sed 's/^[" ]*//g' | sed 's/[" ]*$//g' | sed 's/^-$//')
   local DATE=$(echo "$DATE_TIME" | awk '{print $1}')
   local BASENAME=$(basename "$OLDNAME")
 
   local COUNT=00
-  _log $DATE
-  _log $COUNT
-  _log $EXT
-  _log $(find "${CFG["OUTDIR"]}")
-  _log $(find "${CFG["OUTDIR"]}" -iname "$DATE #$COUNT*.$EXT")
-  _log $(find "${CFG["OUTDIR"]}" -iname "$DATE #$COUNT*.$EXT" | wc -l)
   while [ "$(find "${CFG["OUTDIR"]}" -iname "$DATE #$COUNT*.$EXT" | wc -l)" -ne "0" ]; do
     (( COUNT++ ))
     if [ $COUNT -lt 10 ]; then
       COUNT="0"$COUNT
     fi
   done
-  _log " FILE @ Date/Make-Count:    $CURFILE @ $DATE / $MAKE - $COUNT"
+  _log " FILE @ Date/Make-Count: $CURFILE @ $DATE / $MAKE - $COUNT"
 
   local NEWNAME
   if [ "$EXT" == "jpg" ]; then
