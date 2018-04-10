@@ -85,6 +85,41 @@ _cfgprint() {
   done 
 }
 
+# To be kept synchronized with the equivalent function in reorgmedia
+_get_file_createdate() {
+  # Estrae la data di creazione in base a vari criteri
+  # Campi in input: SPEC (opzionalmente vuoto) e FILE (nome file inclusivo di path)
+  local SPEC=$1
+  local FILE=$2
+
+  if [ -z "$SPEC" ]; then
+    SPEC=$(exiftool -f -s -csv -d "%Y-%m-%d %H:%M:%S" -CreateDate -Model -Make -DateTimeOriginal "$CURFILE" | grep -v SourceFile)
+  fi
+
+  local EXT=""
+  if [[ "$FILE" =~ \.([A-Za-z 0-9]*)$ ]]; then
+    EXT=$(echo "${BASH_REMATCH[1]}" | tr '[:upper:]' '[:lower:]')
+  fi
+  local SHORTNAME=$(basename "$FILE")
+  local DATE
+  # CreateDate:
+  DATE=$(echo ${SPEC} | cut -d , -f 2 -s | sed 's/^-$//')
+    if [ "$DATE" == "" ]; then
+      DATE=$(echo ${SPEC} | cut -d , -f 5 -s | sed 's/^-$//')
+    fi
+
+  if [ -z "$DATE" ] || [[ "$DATE" =~ ^0000.* ]]; then
+    if [[ ("$EXT" == "mpg" && "$SHORTNAME" =~ M2U[0-9]+) || "$EXT" == "webm" || "$EXT" == "jpg" ]]; then
+      # viene dalla videocamera o dalla webcam; prendo per buona la data di ultima modifica
+      DATE=$(stat -c %y "$FILE" | cut -d '.' -f 1)
+    else
+      DATE="2001-01-01 00:00:00"
+    fi
+  fi
+
+  echo "$DATE"
+}
+
 _list() {
   # Crea la lista dei file e data di creazione su un file
   local DIR=$1
@@ -105,24 +140,25 @@ _list() {
     fi
     local SPEC=$(exiftool -f -s -csv -d "%Y-%m-%d %H:%M:%S" -CreateDate -Model -Make -DateTimeOriginal "$f" | grep -v SourceFile)
     local MAKE=$(echo ${SPEC}  | cut -d , -f 4 -s | sed 's/^-$//')
-    local MODEL=$(echo ${SPEC} | cut -d , -f 3 -s | sed 's/^[" ]*//g' | sed 's/[" ]*$//g' | sed 's/^-$//')
-    local DATE=$(echo ${SPEC} | cut -d , -f 2 -s | sed 's/^-$//')
-    if [ "$DATE" == "" ]; then
-      DATE=$(echo ${SPEC} | cut -d , -f 5 -s | sed 's/^-$//')
-    fi
+    local MODEL=$(echo ${SPEC} | cut -d , -f 3 -s | sed 's/^[" ]*//g' | sed 's/[" ]*$//g' | sed 's/G (4)/G4/' | sed 's/BlackBerry //' | sed 's/^-$//')
+    local DATE=$(_get_file_createdate "$SPEC" "$f")
+    # local DATE=$(echo ${SPEC} | cut -d , -f 2 -s | sed 's/^-$//')
+    # if [ "$DATE" == "" ]; then
+    #   DATE=$(echo ${SPEC} | cut -d , -f 5 -s | sed 's/^-$//')
+    # fi
     local DURATION=""
     if [ $(containsElement "$EXT" "${VIDEOEXT[@]}") -eq 0 ]; then
-      DURATION=$(exiftool -f -s3 -Duration -n "$f" | cut -d . -f 1)
+      DURATION=$(exiftool -f -s3 -Duration -n "$f" | cut -d . -f 1 | sed 's/^-$//')
     fi
 
-    if [ "$DATE" == "" ] || [ $(expr match "$DATE" '0000.*') -ne 0 ]; then
-      if [[ ("$EXT" == "mpg" && "$(expr match "$FILENAME" 'M2U.*')" -ne 0) || "$EXT" == "webm" ]]; then
-        # viene dalla videocamera; prendo per buona la data di ultima modifica
-        DATE=$(stat -c %y $f | cut -d '.' -f 1)
-      else
-        DATE="2001-01-01 00:00:00"
-      fi
-    fi
+    # if [ "$DATE" == "" ] || [ $(expr match "$DATE" '0000.*') -ne 0 ]; then
+    #   if [[ ("$EXT" == "mpg" && "$SHORTNAME" =~ M2U[0-9]+) || "$EXT" == "webm" || "$EXT" == "jpg" ]]; then
+    #     # viene dalla videocamera; prendo per buona la data di ultima modifica
+    #     DATE=$(stat -c %y $f | cut -d '.' -f 1)
+    #   else
+    #     DATE="2001-01-01 00:00:00"
+    #   fi
+    # fi
     echo "$FILENAME;$DATE;$DURATION;$MAKE;$MODEL" >> "$FILETMP"
   done
   sort -t ";" -k 2 "$FILETMP" >> "$FILE"

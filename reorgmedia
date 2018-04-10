@@ -64,10 +64,10 @@ _print() {
 }
 
 _do_cmd() {
-  local LOGFILE_TMP=$LOGFILE.tmp
-  exec 2> >(tee -a $LOGFILE_TMP)
+  local LOGFILE_TMP="$LOGFILE.tmp"
+  #exec 2> >(tee -a $LOGFILE_TMP)
   _log " ACTION: $@"
-  "$@"
+  "$@" 2> >(tee -a $LOGFILE_TMP)
   ret=$?
   if [[ $ret -ne 0 ]]; then
       _print "ERRORE: Return code $ret"
@@ -276,6 +276,7 @@ _fill_file_list() {
 
 }
 
+# To be kept synchronized with the equivalent function in showmedia
 _get_file_createdate() {
   # Estrae la data di creazione in base a vari criteri
   # Campi in input: SPEC (opzionalmente vuoto) e FILE (nome file inclusivo di path)
@@ -283,7 +284,7 @@ _get_file_createdate() {
   local FILE=$2
 
   if [ -z "$SPEC" ]; then
-    SPEC=$(exiftool -s -csv -d "%Y-%m-%d %H:%M:%S" -CreateDate -Model -Make -DateTimeOriginal "$CURFILE" | grep -v SourceFile)
+    SPEC=$(exiftool -f -s -csv -d "%Y-%m-%d %H:%M:%S" -CreateDate -Model -Make -DateTimeOriginal "$CURFILE" | grep -v SourceFile)
   fi
 
   local EXT=""
@@ -293,16 +294,15 @@ _get_file_createdate() {
   local SHORTNAME=$(basename "$FILE")
   local DATE
   # CreateDate:
-  DATE=$(echo ${SPEC} | cut -d , -f 2 -s)
-  if [ "$DATE" == "" ]; then
-    # DateTimeOriginal:
-    DATE=$(echo ${SPEC} | cut -d , -f 5 -s)
-  fi
+  DATE=$(echo ${SPEC} | cut -d , -f 2 -s | sed 's/^-$//')
+    if [ "$DATE" == "" ]; then
+      DATE=$(echo ${SPEC} | cut -d , -f 5 -s | sed 's/^-$//')
+    fi
 
   if [ -z "$DATE" ] || [[ "$DATE" =~ ^0000.* ]]; then
-    if [[ ("$EXT" == "mpg" && "$SHORTNAME" =~ M2U[0-9]+) || "$EXT" == "webm" ]]; then
+    if [[ ("$EXT" == "mpg" && "$SHORTNAME" =~ M2U[0-9]+) || "$EXT" == "webm" || "$EXT" == "jpg" ]]; then
       # viene dalla videocamera o dalla webcam; prendo per buona la data di ultima modifica
-      DATE=$(stat -c %y $FILE | cut -d '.' -f 1)
+      DATE=$(stat -c %y "$FILE" | cut -d '.' -f 1)
     else
       DATE="2001-01-01 00:00:00"
     fi
@@ -481,7 +481,7 @@ first_rename() {
         local VIDEOFILTERS
         local AVINPUT
         if [ "$EXT" == "avi" ] && [ "$AUDIOCODEC" == "pcm_u8" ]; then
-          # Procedura da verificare!
+          # Procedura da rettificare!!!
           local AUDIOFILE=${CFG["OUTDIR"]}/$SHORTNAME.wav
           AVINPUT=(-i "$CURFILE" -i "$AUDIOFILE" -map 0:0 -map 1:0)
           AUDIOPARAMS=(libmp3lame -ar 44100 -aq 0) # verificare se ha senso...
@@ -566,34 +566,45 @@ second_rename() {
     EXT=$(echo "${BASH_REMATCH[1]}" | tr '[:upper:]' '[:lower:]')
   fi
 
+  if [ "$(SF_get_field $SF_ROW 10)" == "DONE" ]; then
+    _log " $SHORTNAME in stato DONE. Salto..."
+    return
+  fi
+
   local SPEC=$(exiftool -f -s -csv -d "%Y-%m-%d %H:%M:%S" -CreateDate -Model -Make "$CURFILE" | grep -v SourceFile)
   local MAKE=$(echo ${SPEC}  | cut -d , -f 4 -s | sed 's/^-$//')
-  local MODEL=$(echo ${SPEC} | cut -d , -f 3 -s | sed 's/^[" ]*//g' | sed 's/[" ]*$//g' | sed 's/^-$//')
+  local MODEL=$(echo ${SPEC} | cut -d , -f 3 -s | sed 's/^[" ]*//g' | sed 's/[" ]*$//g' | sed 's/G (4)/G4/' | sed 's/BlackBerry //' | sed 's/^-$//')
   local DATE=$(echo "$DATE_TIME" | awk '{print $1}')
   local BASENAME=$(basename "$OLDNAME")
 
-  local COUNT=00
+  local CNT=0
+  local COUNT=$(printf "%02d\n" $CNT)
   while [ "$(find "${CFG["OUTDIR"]}" -iname "$DATE #$COUNT*.$EXT" | wc -l)" -ne "0" ]; do
-    (( COUNT++ ))
-    if [ $COUNT -lt 10 ]; then
-      COUNT="0"$COUNT
-    fi
+    (( CNT++ ))
+    COUNT=$(printf "%02d\n" $CNT)
   done
   _log " FILE @ Date/Make-Count: $CURFILE @ $DATE / $MAKE - $COUNT"
 
-  local NEWNAME
+  local NEWNAME=""
   if [ "$EXT" == "jpg" ]; then
-    if [ "$ALIAS" != "NONE" ]; then
-      NEWNAME="$DATE #$COUNT ($MAKE $MODEL)-$ALIAS.$EXT"
-    else
-      NEWNAME="$DATE #$COUNT ($MAKE $MODEL).$EXT"
+    NEWNAME+="$DATE #$COUNT"
+    if [[ ! -z "$MAKE" && ! -z "$MODEL" ]]; then
+      NEWNAME+=" ($MAKE $MODEL)"
+    elif [[ ! -z "$MAKE" ]]; then
+      NEWNAME+=" ($MAKE)"
+    elif [[ ! -z "$MODEL" ]]; then
+      NEWNAME+=" ($MODEL)"
     fi
+    if [[ "$ALIAS" != "NONE" ]]; then
+      NEWNAME+="-$ALIAS"
+    fi
+    NEWNAME+=".$EXT"
   else
-    if [ $ALIAS != "NONE" ]; then
-      NEWNAME="$DATE #$COUNT-$ALIAS.$EXT"
-    else
-      NEWNAME="$DATE #$COUNT.$EXT"
+    NEWNAME+="$DATE #$COUNT"
+    if [[ "$ALIAS" != "NONE" ]]; then
+      NEWNAME+="-$ALIAS"
     fi
+    NEWNAME+=".$EXT"
   fi
   SF_set_field $SF_ROW 3 "$NEWNAME"
   SF_set_field $SF_ROW 6 "$MAKE"
@@ -648,11 +659,11 @@ OPTIND=1
 if [ ! -f "$STFILE" ]; then
   PENDING_ITEMS=0
 else
-  PENDING_ITEMS=$(sed '1d' $STFILE | grep -E 'NEW|COMPRESSING' | wc -l)
+  PENDING_ITEMS=$(sed '1d' $STFILE | grep -E 'NEW|COMPRESSING|COPIED' | wc -l)
 fi
 if [ "$PENDING_ITEMS" -gt 0 ]; then
   if [ "${CFG["RESUME"]}" == "NO" ]; then
-    _print "E' stato rilevato un job interrotto ($PENDING_ITEMS elemento/i in sospeso)."
+    _print "E' stato rilevato un job interrotto ($PENDING_ITEMS elemento/i in sospeso su un totale di $(sed '1d' $STFILE | wc -l))."
     _print "%s" "Si desidera continuarlo? [s] "
     read ANSWER
     _print
