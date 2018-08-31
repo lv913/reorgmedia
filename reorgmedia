@@ -2,11 +2,12 @@
 # reorgmedia
 # author: lv913
 # email:  liv913@gmail.com
-# date:   10/Apr/2018
+# date:   31/Aug/2018
 
-VERSION=3.0
+VERSION=3.0.1
 
-WORKINGDIR=$(dirname "$0")
+WORKINGDIR="$HOME/.reorgmedia"
+mkdir -p "$WORKINGDIR"
 LOGFILE=$WORKINGDIR/log.txt
 OUTFILE=$WORKINGDIR/output.txt
 STFILE=$WORKINGDIR/status.list
@@ -147,7 +148,7 @@ _loadconfig() {
   # Le opzioni specificate a runtime hanno la precedenza.
   CONFIGFILE=$1
   CONFIGFILESEC=$WORKINGDIR/cleanconfig.cfg
-  grep -E '^#|^[^ ]*=[^;&]*'  "$CONFIGFILE" > "$CONFIGFILESEC"
+  grep -E '^#|^[^ ]*=[^;&]*'  "$CONFIGFILE" | grep "^\s*CFG" > "$CONFIGFILESEC"
   source "$CONFIGFILESEC" && rm $CONFIGFILESEC
   for i in $(seq ${#PARAMS}); do 
     case ${PARAMS:$i-1:1}
@@ -322,6 +323,8 @@ _get_alias() {
   local ALIAS
 
   if [[ "$FILE" =~ (DSCN[0-9]+) ]]; then
+    ALIAS=${BASH_REMATCH[1]}
+  elif [[ "$FILE" =~ (DSC_[0-9]+) ]]; then
     ALIAS=${BASH_REMATCH[1]}
   elif [[ "$FILE" =~ (^P[0-9]+) ]]; then
     ALIAS=${BASH_REMATCH[1]}
@@ -588,7 +591,9 @@ second_rename() {
   local NEWNAME=""
   if [ "$EXT" == "jpg" ]; then
     NEWNAME+="$DATE #$COUNT"
-    if [[ ! -z "$MAKE" && ! -z "$MODEL" ]]; then
+    if [[ "$MODEL" == "NIKON D700" ]]; then
+      NEWNAME+=" ($MODEL)"
+    elif [[ ! -z "$MAKE" && ! -z "$MODEL" ]]; then
       NEWNAME+=" ($MAKE $MODEL)"
     elif [[ ! -z "$MAKE" ]]; then
       NEWNAME+=" ($MAKE)"
