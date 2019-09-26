@@ -1,21 +1,21 @@
 #!/bin/bash +xn
-# showmedia
+# reorgmedia
 # author: lv913
 # email:  liv913@gmail.com
-# date:   01/Sep/2019
+# date:   26/Sep/2019
 
-VERSION=1.3.1
+VERSION=1.4
 
 WORKINGDIR="$HOME/.reorgmedia"
-mkdir -p "$WORKINGDIR"
 
 declare -A CFG
 CFG["INPUTFILE"]=""
 CFG["INDIR"]=""
 CFG["OUTDIR"]=""
-CFG["OUTFILE"]=$WORKINGDIR/displayout.list
+CFG["WORKFILE"]=$WORKINGDIR/displayout.list
 CFG["PATTERN"]="*"
 CFG["COMPARE"]=NO
+CFG["EQUALS"]=NO
 
 VIDEOEXT=( mp4 avi mov mkv mpg webm )
 
@@ -25,26 +25,26 @@ _usage() {
 cat <<EOF
   showmedia v$VERSION
 
-  Utilizzo: showmedia [OPZIONI]
+  Utilizzo: showmedia [-i DIR] [-o DIR] [-f FILE] [OPZIONI]
+
+  Analizza i file nella directory specificata con -i o con -o, oppure esegue il confronto
+  se sono specificate entrambe.
+  Se presente il parametro -f, verrà analizzato uno specifico file invece delle directory.
+  Se non viene specificato nessuno dei parametri -i, -o o -f, verrà analizzato (se presente)
+  l'ultimo log generato.
 
   OPZIONI:
+    -f FILE         Stampa in formato colonnare i dati contenuti nel 
+                    csv FILE, invece che cercare nelle directory. 
+                    In questo caso sono scartati i parametri -i, -o, 
+                    -P e -w.
+    -h              Visualizza questa guida.
     -i DIR          Specifica la prima directory di analisi.
     -o DIR          Specifica la seconda directory di analisi.
     -P PATTERN      Specifica il pattern dei file da includere.
                     Default: *
-    -w FILE         Specifica il nome del file di output. 
-                    Default: displayout.list
-
-    Se sono specificati sia -i che -o, verrà effettuato il confronto 
-    fra i file contenuti nelle due directory.
-    
-    -f FILE         Stampa i formato colonnare i dati contenuti nel 
-                    csv FILE, invece che cercare nelle directory. 
-                    In questo caso sono scartati i parametri -i, -o, 
-                    -P e -w.
-
-    -V              Visualizza la versione.
-    -h              Visualizza questa guida.
+    -V              Visualizza la versione corrente dello script.
+    -w FILE         Salva su un file di output i risultati.
 
   UTILIZZO FILE DI OUTPUT
     Visualizza su colonne un elenco su file:
@@ -129,7 +129,7 @@ _list() {
 
   truncate -s 0 "$FILE"
   truncate -s 0 "$FILETMP"
-  echo "$DIR;Date;Duration;Make;Model" >> "$FILE"
+  echo "$DIR;Date;Dur;Make;Model" >> "$FILE"
 
   find -L "$DIR" -maxdepth 1 -type f -iname "${CFG["PATTERN"]}" | sort | while read f
   do
@@ -143,23 +143,11 @@ _list() {
     local MAKE=$(echo ${SPEC}  | cut -d , -f 4 -s | sed 's/^-$//')
     local MODEL=$(echo ${SPEC} | cut -d , -f 3 -s | sed 's/^[" ]*//g' | sed 's/[" ]*$//g' | sed 's/G (4)/G4/' | sed 's/BlackBerry //' | sed 's/^-$//')
     local DATE=$(_get_file_createdate "$SPEC" "$f")
-    # local DATE=$(echo ${SPEC} | cut -d , -f 2 -s | sed 's/^-$//')
-    # if [ "$DATE" == "" ]; then
-    #   DATE=$(echo ${SPEC} | cut -d , -f 5 -s | sed 's/^-$//')
-    # fi
     local DURATION=""
     if [ $(containsElement "$EXT" "${VIDEOEXT[@]}") -eq 0 ]; then
       DURATION=$(exiftool -f -s3 -Duration -n "$f" | cut -d . -f 1 | sed 's/^-$//')
     fi
 
-    # if [ "$DATE" == "" ] || [ $(expr match "$DATE" '0000.*') -ne 0 ]; then
-    #   if [[ ("$EXT" == "mpg" && "$SHORTNAME" =~ M2U[0-9]+) || "$EXT" == "webm" || "$EXT" == "jpg" ]]; then
-    #     # viene dalla videocamera; prendo per buona la data di ultima modifica
-    #     DATE=$(stat -c %y $f | cut -d '.' -f 1)
-    #   else
-    #     DATE="2001-01-01 00:00:00"
-    #   fi
-    # fi
     echo "$FILENAME;$DATE;$DURATION;$MAKE;$MODEL" >> "$FILETMP"
   done
   sort -t ";" -k 2 "$FILETMP" >> "$FILE"
@@ -169,17 +157,17 @@ _list() {
 _column () {
   # Stampa la lista in $1 formattata per colonne
   local FILE=$1
-  _print "$(column -s ";" -t "$FILE" -n)"
+  # awk -F';' -v OFS=';' '{ if (NR==1 || $2=="x") print }'
+  if [[ "${CFG["EQUALS"]}" == "YES" ]]; then
+    _print "$(awk -F';' -v OFS=';' '{ if (NR==1 || $2=="x") print }' "$FILE" | column -s ";" -t -n)"
+  else
+    _print "$(column -s ";" -t "$FILE" -n)"
+  fi
 }
 
 # Controllo parametri
 
-if [ "$#" == 0 ]; then
-  _usage
-  exit 0
-fi
-
-optstring='f:i:o:P:Vw:h'
+optstring='f:i:o:P:Vw:eh'
 while getopts "$optstring" option
 do
   case "${option}" in
@@ -188,6 +176,7 @@ do
   o) _cfg OUTDIR "${OPTARG}";;
   w) _cfg OUTFILE "${OPTARG}";;
   P) _cfg PATTERN "${OPTARG}";;
+  e) _cfg EQUALS YES;;
   V) exit 0;;
   h) _usage; exit 0 ;;
   esac
@@ -196,7 +185,17 @@ shift $((OPTIND - 1))
 
 # INIZIO
 
-if [ ! "${CFG["INPUTFILE"]}" == "" ]; then
+if [ -z "${CFG["INDIR"]}" ] && [ -z "${CFG["OUTDIR"]}" ] && [ -z "${CFG["INPUTFILE"]}" ]; then
+  if [[ -n "${CFG["WORKFILE"]}" ]]; then
+    # non è stato specificato nessuno fra -i, -o e -f; esiste il WORKFILE e uso quello
+    _column "${CFG["WORKFILE"]}"
+    exit 0
+  else
+    _print "Non è stato specificato nessuno fra -i, -o e -f e non esiste nessun log recente."
+    exit 1
+  fi
+fi
+if [ -n "${CFG["INPUTFILE"]}" ]; then
   if [ ! -f "${CFG["INPUTFILE"]}" ]; then
     _print "File non esistente: ${CFG["INPUTFILE"]}"
     exit 1
@@ -204,7 +203,7 @@ if [ ! "${CFG["INPUTFILE"]}" == "" ]; then
   _column "${CFG["INPUTFILE"]}"
   exit 0
 fi
-if [ ! "${CFG["INDIR"]}" == "" ] && [ ! "${CFG["OUTDIR"]}" == "" ]; then
+if [ -n "${CFG["INDIR"]}" ] && [ -n "${CFG["OUTDIR"]}" ]; then
   # COMPARE
   if [ ! -d "${CFG["INDIR"]}" ]; then
     _print "Directory non esistente: ${CFG["INDIR"]}"
@@ -220,18 +219,30 @@ if [ ! "${CFG["INDIR"]}" == "" ] && [ ! "${CFG["OUTDIR"]}" == "" ]; then
   sed '1d' -i "$FILE1"
   _list "${CFG["OUTDIR"]}" "$FILE2"
   sed '1d' -i "$FILE2"
-  truncate -s 0 "${CFG["OUTFILE"]}"
-  echo "Date;${CFG["INDIR"]};${CFG["OUTDIR"]};D-i;D-o;Make;Model" >> "${CFG["OUTFILE"]}"
-  join -t ';' -j 2 -a 1 -a 2 -e "" -o 0,1.1,2.1,1.3,2.3,1.4,1.5 "$FILE1" "$FILE2" >> "${CFG["OUTFILE"]}"
+  truncate -s 0 "${CFG["WORKFILE"]}"
+  echo "Date;${CFG["INDIR"]};Dur;${CFG["OUTDIR"]};Dur;Make;Model" >> "${CFG["WORKFILE"]}"
+  # Formato file in ingresso: $DIR;Date;Dur;Make;Model
+  # concateno le liste:
+  join -t ';' -j 2 -a 1 -a 2 -e "" -o 0,1.1,1.3,2.1,2.3,1.4,1.5 "$FILE1" "$FILE2" >> "${CFG["WORKFILE"]}"
+  # riempio l'ultima colonna:
+  awk -F';' -v OFS=';' '{$2=(NR==1 ? "Eq" : ($3==$5 ? "x" : "")) FS $2;}1' "${CFG["WORKFILE"]}" > "${CFG["WORKFILE"]}".tmp
+  mv "${CFG["WORKFILE"]}".tmp "${CFG["WORKFILE"]}"
+
   rm "$FILE1"
   rm "$FILE2"
-  _column "${CFG["OUTFILE"]}"
+  _column "${CFG["WORKFILE"]}"
+  if [[ -n "${CFG["OUTFILE"]}" ]]; then
+    cp "${CFG["WORKFILE"]}" "${CFG["OUTFILE"]}"
+  fi
 else
   # Provo con INDIR
-  if [ ! "${CFG["INDIR"]}" == "" ]; then
+  if [ -n "${CFG["INDIR"]}" ]; then
     if [ -d "${CFG["INDIR"]}" ]; then
-      _list "${CFG["INDIR"]}" "${CFG["OUTFILE"]}"
-      _column "${CFG["OUTFILE"]}"
+      _list "${CFG["INDIR"]}" "${CFG["WORKFILE"]}"
+      _column "${CFG["WORKFILE"]}"
+      if [[ -n "${CFG["OUTFILE"]}" ]]; then
+        cp "${CFG["WORKFILE"]}" "${CFG["OUTFILE"]}"
+      fi
       exit 0
     else
       _print "Directory non esistente: ${CFG["INDIR"]}"
@@ -239,10 +250,13 @@ else
     fi
   fi
   # Provo con OUTDIR
-  if [ ! "${CFG["OUTDIR"]}" == "" ]; then
+  if [ -n "${CFG["OUTDIR"]}" ]; then
     if [ -d "${CFG["OUTDIR"]}" ]; then
-      _list "${CFG["OUTDIR"]}" "${CFG["OUTFILE"]}"
-      _column "${CFG["OUTFILE"]}"
+      _list "${CFG["OUTDIR"]}" "${CFG["WORKFILE"]}"
+      _column "${CFG["WORKFILE"]}"
+      if [[ -n "${CFG["OUTFILE"]}" ]]; then
+        cp "${CFG["WORKFILE"]}" "${CFG["OUTFILE"]}"
+      fi
       exit 0
     else
       _print "Directory non esistente: ${CFG["OUTDIR"]}"
