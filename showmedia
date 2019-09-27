@@ -16,6 +16,7 @@ CFG["WORKFILE"]=$WORKINGDIR/displayout.list
 CFG["PATTERN"]="*"
 CFG["COMPARE"]=NO
 CFG["EQUALS"]=NO
+CFG["NEQUALS"]=NO
 
 VIDEOEXT=( mp4 avi mov mkv mpg webm )
 
@@ -25,7 +26,7 @@ _usage() {
 cat <<EOF
   showmedia v$VERSION
 
-  Utilizzo: showmedia [-i DIR] [-o DIR] [-f FILE] [OPZIONI]
+  Utilizzo: showmedia [-i DIR] [-o DIR] [-f FILE] [-e|-n] [OPZIONI]
 
   Analizza i file nella directory specificata con -i o con -o, oppure esegue il confronto
   se sono specificate entrambe.
@@ -34,12 +35,14 @@ cat <<EOF
   l'ultimo log generato.
 
   OPZIONI:
+    -e              Visualizza i soli file uguali.
     -f FILE         Stampa in formato colonnare i dati contenuti nel 
                     csv FILE, invece che cercare nelle directory. 
                     In questo caso sono scartati i parametri -i, -o, 
                     -P e -w.
     -h              Visualizza questa guida.
     -i DIR          Specifica la prima directory di analisi.
+    -n              Visualizza i soli file differenti.
     -o DIR          Specifica la seconda directory di analisi.
     -P PATTERN      Specifica il pattern dei file da includere.
                     Default: *
@@ -160,6 +163,8 @@ _column () {
   # awk -F';' -v OFS=';' '{ if (NR==1 || $2=="x") print }'
   if [[ "${CFG["EQUALS"]}" == "YES" ]]; then
     _print "$(awk -F';' -v OFS=';' '{ if (NR==1 || $2=="x") print }' "$FILE" | column -s ";" -t -n)"
+  elif [[ "${CFG["NEQUALS"]}" == "YES" ]]; then
+    _print "$(awk -F';' -v OFS=';' '{ if (NR==1 || $2=="") print }' "$FILE" | column -s ";" -t -n)"
   else
     _print "$(column -s ";" -t "$FILE" -n)"
   fi
@@ -167,7 +172,7 @@ _column () {
 
 # Controllo parametri
 
-optstring='f:i:o:P:Vw:eh'
+optstring='f:i:o:P:Vw:enh'
 while getopts "$optstring" option
 do
   case "${option}" in
@@ -176,7 +181,8 @@ do
   o) _cfg OUTDIR "${OPTARG}";;
   w) _cfg OUTFILE "${OPTARG}";;
   P) _cfg PATTERN "${OPTARG}";;
-  e) _cfg EQUALS YES;;
+  e) if [[ "${CFG["NEQUALS"]}" == "YES" ]]; then _print "Errore: sia -e che -n sono presenti"; exit 1; else _cfg EQUALS YES; fi;;
+  n) if [[ "${CFG["EQUALS"]}" == "YES" ]]; then _print "Errore: sia -e che -n sono presenti"; exit 1; else _cfg NEQUALS YES; fi;;
   V) exit 0;;
   h) _usage; exit 0 ;;
   esac
