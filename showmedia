@@ -57,12 +57,14 @@ cat <<EOF
     Visualizza su colonne un elenco su file:
     $ ./showmedia -f displayout.list
 
-    Genera un elenco dei valori della colonna 2 se manca il valore sulla colonna 3:
-    $ awk -F ";" '{if (!length(\$3)){print \$2}}' displayout.list
+    Genera un elenco dei file nella prima directory se manca il file nella seconda:
+    $ showmedia -n -1
 
-    Copio i file in colonna 2 se manca il valore sulla colonna 3:
-    $ awk -F ";" '{if (!length(\$3)){print \$2}}' displayout.list | while read f; do cp "\$FROM/\$f" "\$TO"; done
+    Copio i file nella prima directory se manca dalla seconda:
+    $ showmedia -n -1 | while read f; do cp "\$FROM/\$f" "\$TO"; done
 
+    Applica il tag ".dup" ai file duplicati nella seconda directory:
+    $ showmedia -e -2 | while read f; do mv "\$FROM/\$f" "t\$FROM/\$f.dup"; done
 EOF
 }
 
