@@ -13,7 +13,9 @@ chown root:root /usr/bin/showmedia.new
 mv /usr/bin/showmedia.new /usr/bin/showmedia
 
 #update version variable post install
-VERSION=$(reorgmedia -V 2>>errors | head -n 1)
+VERSION_1=$(reorgmedia -V 2>>errors | head -n 1)
+VERSION_2=$(showmedia -V 2>>errors | head -n 1)
 
-echo "$VERSION has successfully installed."
+echo "$VERSION_1 has successfully installed."
+echo "$VERSION_2 has successfully installed."
 exit 0

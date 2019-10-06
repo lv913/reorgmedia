@@ -2,9 +2,9 @@
 # reorgmedia
 # author: lv913
 # email:  liv913@gmail.com
-# date:   26/Sep/2019
+# date:   06/Oct/2019
 
-VERSION=1.4
+VERSION=1.5
 
 WORKINGDIR="$HOME/.reorgmedia"
 
@@ -17,6 +17,8 @@ CFG["PATTERN"]="*"
 CFG["COMPARE"]=NO
 CFG["EQUALS"]=NO
 CFG["NEQUALS"]=NO
+CFG["COL1"]=NO
+CFG["COL2"]=NO
 
 VIDEOEXT=( mp4 avi mov mkv mpg webm )
 
@@ -26,7 +28,7 @@ _usage() {
 cat <<EOF
   showmedia v$VERSION
 
-  Utilizzo: showmedia [-i DIR] [-o DIR] [-f FILE] [-e|-n] [OPZIONI]
+  Utilizzo: showmedia [-i DIR] [-o DIR] [-f FILE] [-e|-n] [-1|-2] [OPZIONI]
 
   Analizza i file nella directory specificata con -i o con -o, oppure esegue il confronto
   se sono specificate entrambe.
@@ -35,15 +37,17 @@ cat <<EOF
   l'ultimo log generato.
 
   OPZIONI:
+    -1              Visualizza i soli nomi dei file presenti nella prima directory d'analisi.
+    -2              Visualizza i soli nomi dei file presenti nella prima directory d'analisi.
     -e              Visualizza i soli file uguali.
     -f FILE         Stampa in formato colonnare i dati contenuti nel 
                     csv FILE, invece che cercare nelle directory. 
                     In questo caso sono scartati i parametri -i, -o, 
                     -P e -w.
     -h              Visualizza questa guida.
-    -i DIR          Specifica la prima directory di analisi.
+    -i DIR          Specifica la prima directory d'analisi.
     -n              Visualizza i soli file differenti.
-    -o DIR          Specifica la seconda directory di analisi.
+    -o DIR          Specifica la seconda directory d'analisi.
     -P PATTERN      Specifica il pattern dei file da includere.
                     Default: *
     -V              Visualizza la versione corrente dello script.
@@ -160,19 +164,33 @@ _list() {
 _column () {
   # Stampa la lista in $1 formattata per colonne
   local FILE=$1
-  # awk -F';' -v OFS=';' '{ if (NR==1 || $2=="x") print }'
+  local PRINTFILE=${CFG["WORKFILE"]}.print
   if [[ "${CFG["EQUALS"]}" == "YES" ]]; then
-    _print "$(awk -F';' -v OFS=';' '{ if (NR==1 || $2=="x") print }' "$FILE" | column -s ";" -t -n)"
+    # soli elementi uguali
+    _print "$(awk -F';' -v OFS=';' '{ if (NR==1 || $2=="x") print }' "$FILE")" > "$PRINTFILE"
   elif [[ "${CFG["NEQUALS"]}" == "YES" ]]; then
-    _print "$(awk -F';' -v OFS=';' '{ if (NR==1 || $2=="") print }' "$FILE" | column -s ";" -t -n)"
+    # soli elementi diversi
+    _print "$(awk -F';' -v OFS=';' '{ if (NR==1 || $2=="") print }' "$FILE")" > "$PRINTFILE"
   else
-    _print "$(column -s ";" -t "$FILE" -n)"
+    # tutti gli elementi
+    _print "$(cat "$FILE")" > "$PRINTFILE"
   fi
+  if [[ "${CFG["COL1"]}" == "YES" ]]; then
+    # soli nomi dei file prima directory di analisi
+    _print "$(awk -F';' -v OFS=';' '{if (NR>1 && $3!="") print $3 }' "$PRINTFILE")" > "$PRINTFILE.tmp"
+    mv "$PRINTFILE.tmp" "$PRINTFILE"
+  elif [[ "${CFG["COL2"]}" == "YES" ]]; then
+    # soli nomi dei file seconda directory di analisi
+    _print "$(awk -F';' -v OFS=';' '{if (NR>1 && $5!="") print $5 }' "$PRINTFILE")" > "$PRINTFILE.tmp"
+    mv "$PRINTFILE.tmp" "$PRINTFILE"
+  fi
+  _print "$(cat "$PRINTFILE" | column -s ";" -t -n)"
+  rm "$PRINTFILE"
 }
 
 # Controllo parametri
 
-optstring='f:i:o:P:Vw:enh'
+optstring='f:i:o:P:Vw:en12h'
 while getopts "$optstring" option
 do
   case "${option}" in
@@ -181,9 +199,11 @@ do
   o) _cfg OUTDIR "${OPTARG}";;
   w) _cfg OUTFILE "${OPTARG}";;
   P) _cfg PATTERN "${OPTARG}";;
+  1) _cfg COL1 YES;;
+  2) _cfg COL2 YES;;
   e) if [[ "${CFG["NEQUALS"]}" == "YES" ]]; then _print "Errore: sia -e che -n sono presenti"; exit 1; else _cfg EQUALS YES; fi;;
   n) if [[ "${CFG["EQUALS"]}" == "YES" ]]; then _print "Errore: sia -e che -n sono presenti"; exit 1; else _cfg NEQUALS YES; fi;;
-  V) exit 0;;
+  V) printf "\033[0;32m%s\033[0m\n" "showmedia v$VERSION"; exit 0;;
   h) _usage; exit 0 ;;
   esac
 done
@@ -191,6 +211,10 @@ shift $((OPTIND - 1))
 
 # INIZIO
 
+if [[ "${CFG["COL1"]}" == "YES" ]] && [[ "${CFG["COL2"]}" == "YES" ]]; then
+    _print "Non è possibile specificare sia -1 che -2."
+    exit 1
+fi
 if [ -z "${CFG["INDIR"]}" ] && [ -z "${CFG["OUTDIR"]}" ] && [ -z "${CFG["INPUTFILE"]}" ]; then
   if [[ -n "${CFG["WORKFILE"]}" ]]; then
     # non è stato specificato nessuno fra -i, -o e -f; esiste il WORKFILE e uso quello
@@ -231,7 +255,7 @@ if [ -n "${CFG["INDIR"]}" ] && [ -n "${CFG["OUTDIR"]}" ]; then
   # concateno le liste:
   join -t ';' -j 2 -a 1 -a 2 -e "" -o 0,1.1,1.3,2.1,2.3,1.4,1.5 "$FILE1" "$FILE2" >> "${CFG["WORKFILE"]}"
   # riempio l'ultima colonna:
-  awk -F';' -v OFS=';' '{$2=(NR==1 ? "Eq" : ($3==$5 ? "x" : "")) FS $2;}1' "${CFG["WORKFILE"]}" > "${CFG["WORKFILE"]}".tmp
+  awk -F';' -v OFS=';' '{$2=(NR==1 ? "Eq" : (( $3==$5 && $3!="" ) ? "x" : "")) FS $2;}1' "${CFG["WORKFILE"]}" > "${CFG["WORKFILE"]}".tmp
   mv "${CFG["WORKFILE"]}".tmp "${CFG["WORKFILE"]}"
 
   rm "$FILE1"
